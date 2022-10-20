@@ -103,7 +103,7 @@ class EGNN(nn.Module):
 
 class MEGNN(nn.Module):
     def __init__(self, n_graphs, in_node_nf, in_edge_nf, hidden_nf, device='cpu', act_fn=nn.SiLU(), n_layers=4, coords_weight=1.0, attention=False, node_attr=1):
-        super(EGNN, self).__init__()
+        super(MEGNN, self).__init__()
         self.hidden_nf = hidden_nf
         self.device = device
         self.n_layers = n_layers
@@ -129,12 +129,14 @@ class MEGNN(nn.Module):
                                     nn.Linear(n_graphs * self.hidden_nf, 1)))
         self.to(self.device)
 
-    def forward(self, h0, x, edges, edge_attr, node_masks, edge_masks, n_nodes):
+    def forward(self, h0, x, all_edges, all_edge_attr, node_masks, edge_masks, n_nodes):
         hf = []
         for j in range(self.n_graphs):
             h = self.embedding(h0[j])
             node_mask = node_masks[j]
             edge_mask = edge_masks[j]
+            edges = all_edges[j]
+            edge_attr = all_edge_attr[j]
             for i in range(0, self.n_layers):
                 if self.node_attr:
                     h, _, _ = self._modules["gcl_{}_{}".format(j,i)](h, edges, x, node_mask, edge_mask, edge_attr=edge_attr, node_attr=h0, n_nodes=n_nodes)
