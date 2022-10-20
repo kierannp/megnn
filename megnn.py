@@ -101,6 +101,68 @@ class EGNN(nn.Module):
         pred = self.graph_dec(h)
         return pred.squeeze(1)
 
+class PairEGNN(nn.Module):
+    def __init__(self, in_node_nf, in_edge_nf, hidden_nf, device='cpu', act_fn=nn.SiLU(), n_layers=4, coords_weight=1.0, attention=False, node_attr=1):
+        super(PairEGNN, self).__init__()
+        self.hidden_nf = hidden_nf
+        self.device = device
+        self.n_layers = n_layers
+
+        ### Encoders
+        self.embedding_s = nn.Linear(in_node_nf, hidden_nf)
+        self.embedding_t = nn.Linear(in_node_nf, hidden_nf)
+
+        self.node_attr = node_attr
+        if node_attr:
+            n_node_attr = in_node_nf
+        else:
+            n_node_attr = 0
+        ### Graph convolution layers
+        for i in range(0, n_layers):
+            self.add_module("gcl_s_%d" % i, E_GCL_mask(self.hidden_nf, self.hidden_nf, self.hidden_nf, edges_in_d=in_edge_nf, nodes_attr_dim=n_node_attr, act_fn=act_fn, recurrent=True, coords_weight=coords_weight, attention=attention))
+            self.add_module("gcl_t_%d" % i, E_GCL_mask(self.hidden_nf, self.hidden_nf, self.hidden_nf, edges_in_d=in_edge_nf, nodes_attr_dim=n_node_attr, act_fn=act_fn, recurrent=True, coords_weight=coords_weight, attention=attention))
+
+        ### Decoders
+        self.node_dec_s = nn.Sequential(nn.Linear(self.hidden_nf, self.hidden_nf),
+                                      act_fn,
+                                      nn.Linear(self.hidden_nf, self.hidden_nf))
+
+        self.node_dec_t = nn.Sequential(nn.Linear(self.hidden_nf, self.hidden_nf),
+                                act_fn,
+                                nn.Linear(self.hidden_nf, self.hidden_nf))
+
+        self.graph_dec = nn.Sequential(nn.Linear(2*self.hidden_nf, 2*self.hidden_nf),
+                                       act_fn,
+                                       nn.Linear(2*self.hidden_nf, 1))
+        self.to(self.device)
+
+    def forward(self, h0_s, h0_t, edges_s, edges_t, edge_attr, node_mask_s, edge_mask_s, n_nodes_s, node_mask_t, edge_mask_t, n_nodes_t, x_s, x_t):
+        h_s = self.embedding_s(h0_s)
+        h_t = self.embedding_t(h0_t)
+
+        for i in range(0, self.n_layers):
+            if self.node_attr:
+                h_s, _, _ = self._modules["gcl_s_%d" % i](h_s, edges_s, x_s, node_mask_s, edge_mask_s, edge_attr=edge_attr, node_attr=h0_s, n_nodes=n_nodes_s)
+                h_t, _, _ = self._modules["gcl_t_%d" % i](h_t, edges_t, x_t, node_mask_t, edge_mask_t, edge_attr=edge_attr, node_attr=h0_t, n_nodes=n_nodes_t)
+            else:
+                h_s, _, _ = self._modules["gcl_s_%d" % i](h_s, edges_s, x_s, node_mask_s, edge_mask_s, edge_attr=edge_attr,
+                                                      node_attr=None, n_nodes=n_nodes_s)
+                h_t, _, _ = self._modules["gcl_t_%d" % i](h_t, edges_t, x_t, node_mask_t, edge_mask_t, edge_attr=edge_attr,
+                                                      node_attr=None, n_nodes=n_nodes_t)
+
+        h_s = self.node_dec_s(h_s)
+        h_s = h_s * node_mask_s
+        h_s = h_s.view(-1, n_nodes_s, self.hidden_nf)
+        h_s = torch.sum(h_s, dim=1)
+
+        h_t = self.node_dec_t(h_t)
+        h_t = h_t * node_mask_t
+        h_t = h_t.view(-1, n_nodes_t, self.hidden_nf)
+        h_t = torch.sum(h_t, dim=1)
+
+        pred = self.graph_dec(torch.cat((h_s,h_t), dim=1))
+        return pred.squeeze(1)
+
 class MEGNN(nn.Module):
     def __init__(self, n_graphs, in_node_nf, in_edge_nf, hidden_nf, device='cpu', act_fn=nn.SiLU(), n_layers=4, coords_weight=1.0, attention=False, node_attr=1):
         super(MEGNN, self).__init__()
@@ -136,7 +198,10 @@ class MEGNN(nn.Module):
             node_mask = node_masks[j]
             edge_mask = edge_masks[j]
             edges = all_edges[j]
-            edge_attr = all_edge_attr[j]
+            if all_edge_attr is not None:
+                edge_attr = all_edge_attr[j]
+            else:
+                edge_attr = None
             for i in range(0, self.n_layers):
                 if self.node_attr:
                     h, _, _ = self._modules["gcl_{}_{}".format(j,i)](h, edges, x, node_mask, edge_mask, edge_attr=edge_attr, node_attr=h0, n_nodes=n_nodes)
