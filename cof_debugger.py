@@ -1,10 +1,13 @@
+
 import torch
+
+
 import torch
 from torch import nn
 import torch_geometric as tg
 from torch_geometric.loader import DataLoader
+from typing import List, Optional, Union
 import torch.utils.data
-import shutil
 import sys
 sys.path.insert(1, '~/egnn_cof/models/egnn_clean')
 sys.path.insert(1, '~/egnn_cof')
