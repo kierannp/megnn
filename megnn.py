@@ -198,20 +198,24 @@ class MEGNN(nn.Module):
             node_mask = node_masks[j]
             edge_mask = edge_masks[j]
             edges = all_edges[j]
+            node_attr = h0[j]
+            x_curr = x[j]
+            n_node = n_nodes[j]
             if all_edge_attr is not None:
                 edge_attr = all_edge_attr[j]
             else:
                 edge_attr = None
             for i in range(0, self.n_layers):
                 if self.node_attr:
-                    h, _, _ = self._modules["gcl_{}_{}".format(j,i)](h, edges, x, node_mask, edge_mask, edge_attr=edge_attr, node_attr=h0, n_nodes=n_nodes)
+                    h, _, _ = self._modules["gcl_{}_{}".format(j,i)](h, edges, x_curr, node_mask, edge_mask, edge_attr=edge_attr, node_attr=node_attr, n_nodes=n_node)
                 else:
-                    h, _, _ = self._modules["gcl_{}_{}".format(j,i)](h, edges, x, node_mask, edge_mask, edge_attr=edge_attr,
+                    h, _, _ = self._modules["gcl_{}_{}".format(j,i)](h, edges, x_curr, node_mask, edge_mask, edge_attr=edge_attr,
                                                         node_attr=None, n_nodes=n_nodes)
             h = self._modules["node_dec_{}".format(j)](h)
             h = h * node_mask
-            h = h.view(-1, n_nodes, self.hidden_nf)
+            h = h.view(-1, n_node, self.hidden_nf)
             h = torch.sum(h, dim=1)
             hf.append(h)
-        pred = self.graph_dec(torch.cat(hf))
+
+        pred = self.graph_dec(torch.cat(hf, dim=1))
         return pred.squeeze(1)

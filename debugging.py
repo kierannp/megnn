@@ -35,17 +35,17 @@ dat = Cloud_Point_Dataset(root='.')
 batch_size = 8
 
 dat.shuffle()
-train_dataset = dat[:2000]
-test_dataset = dat[2000:]
+train_dataset = dat[:5000]
+test_dataset = dat[5000:]
 train_loader = DataLoader(train_dataset, batch_size=batch_size, follow_batch=['x_s', 'x_t', 'positions_s', 'positions_t'], shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, follow_batch=['x_s', 'x_t','positions_s', 'positions_t'], shuffle=False)
 
 prop_mean, prop_mad = compute_mean_mad(dat.dataframe['CP (C)'])
 
-# model = megnn.MEGNN(n_graphs=2, in_node_nf=5, in_edge_nf=0, hidden_nf=128, device=device, n_layers=7, coords_weight=1.0,
-#              attention=False, node_attr=1)
-model = PairEGNN(in_node_nf=len(dat.elements), in_edge_nf=0, hidden_nf=128, device=device, n_layers=7, coords_weight=1.0,
+model = MEGNN(n_graphs=2, in_node_nf=len(dat.elements), in_edge_nf=0, hidden_nf=128, device=device, n_layers=7, coords_weight=1.0,
              attention=False, node_attr=1)
+# model = PairEGNN(in_node_nf=len(dat.elements), in_edge_nf=0, hidden_nf=128, device=device, n_layers=7, coords_weight=1.0,
+#              attention=False, node_attr=1)
 
 optimizer = optim.Adam(model.parameters(), lr=5e-4, weight_decay=1e-16)
 lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, n_epochs)
@@ -93,15 +93,12 @@ def train(epoch, loader, partition='train'):
 
         label = data.y.to(device, dtype)
         # MEGNN
-        # pred = model(h0=[one_hot_s, one_hot_t], all_edges=[edges_s, edges_t], all_edge_attr=None, node_masks=[atom_mask_s, atom_mask_t],
-        #             edge_masks=[edge_mask_s, edge_mask_t], n_nodes=[n_nodes_s, n_nodes_t], x=[atom_positions_s, atom_positions_t])
+        pred = model(h0=[one_hot_s, one_hot_t], all_edges=[edges_s, edges_t], all_edge_attr=None, node_masks=[atom_mask_s, atom_mask_t],
+                    edge_masks=[edge_mask_s, edge_mask_t], n_nodes=[n_nodes_s, n_nodes_t], x=[atom_positions_s, atom_positions_t])
         #PairEGNN
         # pred = model(h0_s=one_hot_s, h0_t=one_hot_t, edges_s=edges_s, edges_t=edges_t, edge_attr=None, node_mask_s=atom_mask_s, 
         #             edge_mask_s=edge_mask_s, n_nodes_s=n_nodes_s, node_mask_t=atom_mask_t, edge_mask_t=edge_mask_t, 
         #             n_nodes_t=n_nodes_t, x_s=atom_positions_s, x_t=atom_positions_t)
-        pred = model(h0_s=one_hot_s, h0_t=one_hot_t, edges_s=edges_s, edges_t=edges_t, edge_attr=None, node_mask_s=atom_mask_s, 
-                    edge_mask_s=edge_mask_s, n_nodes_s=n_nodes_s, node_mask_t=atom_mask_t, edge_mask_t=edge_mask_t, 
-                    n_nodes_t=n_nodes_t, x_s=atom_positions_s, x_t=atom_positions_t)
         if partition == 'train':
             loss = loss_l1(pred, (label - prop_mean) / prop_mad)
             loss.backward()
