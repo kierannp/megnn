@@ -6,6 +6,7 @@ from torch_geometric.loader import DataLoader
 import torch.utils.data
 import shutil
 import sys
+import rdkit 
 sys.path.insert(1, '~/egnn_cof/models/egnn_clean')
 sys.path.insert(1, '~/egnn_cof')
 # from easydict import EasyDict as edict
@@ -16,8 +17,8 @@ from loader import *
 from megnn import *
 from utils import *
 
-def compute_cof_mean_mad(dataframe):
-    values = torch.Tensor(dataframe['COF'])
+def compute_mean_mad(series):
+    values = torch.Tensor(series)
     mean = torch.mean(values)
     ma = torch.abs(values - mean)
     mad = torch.mean(ma)
@@ -29,7 +30,7 @@ shutil.rmtree('./processed')
 n_epochs  = 2
 device = torch.device("cpu")
 dtype = torch.float32
-dat = COF_Dataset(root='.')
+dat = Cloud_Point_Dataset(root='.')
 
 batch_size = 8
 
@@ -39,11 +40,11 @@ test_dataset = dat[2000:]
 train_loader = DataLoader(train_dataset, batch_size=batch_size, follow_batch=['x_s', 'x_t', 'positions_s', 'positions_t'], shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, follow_batch=['x_s', 'x_t','positions_s', 'positions_t'], shuffle=False)
 
-prop_mean, prop_mad = compute_cof_mean_mad(dat.dataframe)
+prop_mean, prop_mad = compute_mean_mad(dat.dataframe['CP (C)'])
 
 # model = megnn.MEGNN(n_graphs=2, in_node_nf=5, in_edge_nf=0, hidden_nf=128, device=device, n_layers=7, coords_weight=1.0,
 #              attention=False, node_attr=1)
-model = PairEGNN(in_node_nf=5, in_edge_nf=0, hidden_nf=128, device=device, n_layers=7, coords_weight=1.0,
+model = PairEGNN(in_node_nf=len(dat.elements), in_edge_nf=0, hidden_nf=128, device=device, n_layers=7, coords_weight=1.0,
              attention=False, node_attr=1)
 
 optimizer = optim.Adam(model.parameters(), lr=5e-4, weight_decay=1e-16)
@@ -95,6 +96,9 @@ def train(epoch, loader, partition='train'):
         # pred = model(h0=[one_hot_s, one_hot_t], all_edges=[edges_s, edges_t], all_edge_attr=None, node_masks=[atom_mask_s, atom_mask_t],
         #             edge_masks=[edge_mask_s, edge_mask_t], n_nodes=[n_nodes_s, n_nodes_t], x=[atom_positions_s, atom_positions_t])
         #PairEGNN
+        # pred = model(h0_s=one_hot_s, h0_t=one_hot_t, edges_s=edges_s, edges_t=edges_t, edge_attr=None, node_mask_s=atom_mask_s, 
+        #             edge_mask_s=edge_mask_s, n_nodes_s=n_nodes_s, node_mask_t=atom_mask_t, edge_mask_t=edge_mask_t, 
+        #             n_nodes_t=n_nodes_t, x_s=atom_positions_s, x_t=atom_positions_t)
         pred = model(h0_s=one_hot_s, h0_t=one_hot_t, edges_s=edges_s, edges_t=edges_t, edge_attr=None, node_mask_s=atom_mask_s, 
                     edge_mask_s=edge_mask_s, n_nodes_s=n_nodes_s, node_mask_t=atom_mask_t, edge_mask_t=edge_mask_t, 
                     n_nodes_t=n_nodes_t, x_s=atom_positions_s, x_t=atom_positions_t)
