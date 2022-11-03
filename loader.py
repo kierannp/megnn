@@ -14,7 +14,9 @@ from urllib.request import urlopen
 from urllib.parse import quote
 
 class PairData(Data):
-    def __init__(self, edge_index_s=None, x_s=None, positions_s=None, n_nodes_s=None,edge_index_t=None, x_t=None, positions_t=None, n_nodes_t=None, y=None):
+    def __init__(self, edge_index_s=None, x_s=None, positions_s=None, 
+                n_nodes_s=None,edge_index_t=None, x_t=None, positions_t=None,
+                n_nodes_t=None, y=None, enviro = None):
         super().__init__()
         self.edge_index_s = edge_index_s
         self.x_s = x_s
@@ -25,6 +27,8 @@ class PairData(Data):
         self.x_t = x_t
         self.positions_t = positions_t
         self.n_nodes_t = n_nodes_t
+
+        self.enviro = enviro
 
         self.y = y
 
@@ -325,6 +329,7 @@ class Cloud_Point_Dataset(InMemoryDataset):
         for i, row in self.dataframe.iterrows():
             polymer_smiles = row['Polymer SMILES']
             solvent_smiles = row['Solvent SMILES']
+            enviro = [ row['PDI'], row['Mw(Da)'], row['\phi'], row['w'] ]
             if polymer_smiles not in broken_smiles and solvent_smiles not in broken_smiles:
                 edges_poly.append(self.smiles2e_index[polymer_smiles])
                 edges_solv.append(self.smiles2e_index[solvent_smiles])
@@ -338,8 +343,9 @@ class Cloud_Point_Dataset(InMemoryDataset):
                 edge_index_solv = self.smiles2e_index[solvent_smiles]
                 positions_solv = torch.tensor(self.smiles2xyz[solvent_smiles])
                 n_nodes_solv = self.smiles2n_nodes[solvent_smiles]
-                # print('x_s:{}, x_t:{}, e_s:{}, e_t:{}, p_s:{}, p_t:{}'.format(x_s.size(),x_t.size(),edge_index_s.size(), edge_index_t.size(),positions_s.size(),positions_t.size()))
-                p_data = PairData(edge_index_poly, x_poly, positions_poly, n_nodes_poly, edge_index_solv, x_solv, positions_solv, n_nodes_solv,  y = torch.tensor(row['CP (C)']))
+                p_data = PairData(edge_index_poly, x_poly, positions_poly, n_nodes_poly, 
+                edge_index_solv, x_solv, positions_solv, n_nodes_solv,  
+                y = torch.tensor(row['CP (C)']), enviro = torch.tensor(enviro).unsqueeze(1).reshape(1,len(enviro)))
                 data_list.append(p_data)
         if self.pre_filter is not None:
             data_list = [data for data in data_list if self.pre_filter(data)]

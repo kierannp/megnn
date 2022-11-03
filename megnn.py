@@ -164,12 +164,15 @@ class PairEGNN(nn.Module):
         return pred.squeeze(1)
 
 class MEGNN(nn.Module):
-    def __init__(self, n_graphs, in_node_nf, in_edge_nf, hidden_nf, device='cpu', act_fn=nn.SiLU(), n_layers=4, coords_weight=1.0, attention=False, node_attr=1):
+    def __init__(self, n_graphs, in_node_nf, in_edge_nf, hidden_nf, device, act_fn=nn.SiLU(), 
+                n_layers=7, coords_weight=1.0, attention=True, node_attr=1, n_enviro = 0):
         super(MEGNN, self).__init__()
         self.hidden_nf = hidden_nf
         self.device = device
         self.n_layers = n_layers
         self.n_graphs = n_graphs
+        self.n_enviro = n_enviro
+        n_enviro_dim = 0 if n_enviro == 0 else 1
 
         ### Encoder
         self.embedding = nn.Linear(in_node_nf, hidden_nf)
@@ -186,12 +189,16 @@ class MEGNN(nn.Module):
             self.add_module("node_dec_{}".format(i), nn.Sequential( nn.Linear(self.hidden_nf, self.hidden_nf),
                                                                     act_fn,
                                                                     nn.Linear(self.hidden_nf, self.hidden_nf)))
-        self.add_module("graph_dec", nn.Sequential(nn.Linear(n_graphs * self.hidden_nf, n_graphs * self.hidden_nf),
+        if n_enviro != 0:
+            self.add_module('enviro_enc', nn.Sequential( nn.Linear(n_enviro, self.hidden_nf),
+                                                                    act_fn,
+                                                         nn.Linear(self.hidden_nf, self.hidden_nf)) )
+        self.add_module("grand_dec", nn.Sequential(nn.Linear((n_graphs+ n_enviro_dim) * self.hidden_nf,(n_graphs+ n_enviro_dim) * self.hidden_nf),
                                     act_fn,
-                                    nn.Linear(n_graphs * self.hidden_nf, 1)))
+                                    nn.Linear((n_graphs+ n_enviro_dim) * self.hidden_nf, 1)))
         self.to(self.device)
 
-    def forward(self, h0, x, all_edges, all_edge_attr, node_masks, edge_masks, n_nodes):
+    def forward(self, h0, x, all_edges, all_edge_attr, node_masks, edge_masks, n_nodes, enviro=None):
         hf = []
         for j in range(self.n_graphs):
             h = self.embedding(h0[j])
@@ -216,6 +223,10 @@ class MEGNN(nn.Module):
             h = h.view(-1, n_node, self.hidden_nf)
             h = torch.sum(h, dim=1)
             hf.append(h)
-
-        pred = self.graph_dec(torch.cat(hf, dim=1))
+        if enviro is not None:
+            enviro_out = self.enviro_enc(enviro)
+            hf.append(enviro_out)
+        # pred = self.grand_dec(torch.cat(hf, dim=1)) if enviro is None else self.grand_dec(torch.cat((hf,enviro_out), dim=1))
+        combined = torch.cat(hf, dim=1)
+        pred = self.grand_dec(combined)
         return pred.squeeze(1)

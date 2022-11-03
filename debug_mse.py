@@ -24,9 +24,12 @@ from megnn import *
 from utils import *
 
 # clear the processed dataset
-shutil.rmtree('./processed')
+try:
+    shutil.rmtree('./processed')
+except:
+    pass
 
-n_epochs  = 10
+n_epochs  = 5
 device = torch.device("cpu")
 dtype = torch.float32
 dat = Cloud_Point_Dataset(root='.')
@@ -41,12 +44,14 @@ train_loader = DataLoader(train_dataset, batch_size=batch_size, follow_batch=['x
 test_loader = DataLoader(test_dataset, batch_size=batch_size, follow_batch=['x_s', 'x_t','positions_s', 'positions_t'], shuffle=False)
 valid_loader = DataLoader(valid_dataset, batch_size=batch_size, follow_batch=['x_s', 'x_t','positions_s', 'positions_t'], shuffle=False)
 
-# model = MEGNN(n_graphs=2, in_node_nf=len(dat.elements), in_edge_nf=0, hidden_nf=128, device=device, n_layers=7, coords_weight=1.0,
-#              attention=False, node_attr=1)
-model = PairEGNN(in_node_nf=len(dat.elements), in_edge_nf=0, hidden_nf=128, device=device, n_layers=7, coords_weight=1.0,
-             attention=False, node_attr=1)
-optimizer = torch.optim.Adam(model.parameters())
-loss_func = torch.nn.MSELoss()
+model = MEGNN(n_graphs=2, in_node_nf=len(dat.elements), in_edge_nf=0, hidden_nf=128, device=device, n_layers=7, coords_weight=1.0,
+             attention=True, node_attr=1, n_enviro=4)
+# model = PairEGNN(in_node_nf=len(dat.elements), in_edge_nf=0, hidden_nf=128, device=device, n_layers=7, coords_weight=1.0,
+#              attention=True, node_attr=1)
+
+optimizer = optim.Adam(model.parameters())
+loss_func = nn.MSELoss()
+
 
 def train():
     model.train()
@@ -74,11 +79,15 @@ def train():
         one_hot_t = one_hot_t.view(batch_size_t * n_nodes_t, -1).to(device)
         edges_s = get_adj_matrix(n_nodes_s, batch_size_s, device)
         edges_t = get_adj_matrix(n_nodes_t, batch_size_t, device)
+        enviro = data.enviro.to(device, dtype)
         label = data.y.to(device, dtype)
         
-        pred = model(h0_s=one_hot_s, h0_t=one_hot_t, edges_s=edges_s, edges_t=edges_t, edge_attr=None, node_mask_s=atom_mask_s, 
-                    edge_mask_s=edge_mask_s, n_nodes_s=n_nodes_s, node_mask_t=atom_mask_t, edge_mask_t=edge_mask_t, 
-                    n_nodes_t=n_nodes_t, x_s=atom_positions_s, x_t=atom_positions_t)
+        # pred = model(h0_s=one_hot_s, h0_t=one_hot_t, edges_s=edges_s, edges_t=edges_t, edge_attr=None, node_mask_s=atom_mask_s, 
+        #             edge_mask_s=edge_mask_s, n_nodes_s=n_nodes_s, node_mask_t=atom_mask_t, edge_mask_t=edge_mask_t, 
+        #             n_nodes_t=n_nodes_t, x_s=atom_positions_s, x_t=atom_positions_t)
+        pred = model(h0=[one_hot_s, one_hot_t], x=[atom_positions_s, atom_positions_t], all_edges=[edges_s, edges_t],
+                         all_edge_attr=[None, None], node_masks=[atom_mask_s, atom_mask_t],
+                         edge_masks=[edge_mask_s, edge_mask_t], n_nodes=[n_nodes_s, n_nodes_t], enviro = enviro)
         loss = loss_func(pred, label)
         epoch_loss += loss
         loss.backward()  # Derive gradients.
@@ -114,11 +123,15 @@ def test(loader):
         one_hot_t = one_hot_t.view(batch_size_t * n_nodes_t, -1).to(device)
         edges_s = get_adj_matrix(n_nodes_s, batch_size_s, device)
         edges_t = get_adj_matrix(n_nodes_t, batch_size_t, device)
+        enviro = data.enviro.to(device, dtype)
         label = data.y.to(device, dtype)
         
-        pred = model(h0_s=one_hot_s, h0_t=one_hot_t, edges_s=edges_s, edges_t=edges_t, edge_attr=None, node_mask_s=atom_mask_s, 
-                    edge_mask_s=edge_mask_s, n_nodes_s=n_nodes_s, node_mask_t=atom_mask_t, edge_mask_t=edge_mask_t, 
-                    n_nodes_t=n_nodes_t, x_s=atom_positions_s, x_t=atom_positions_t)
+        # pred = model(h0_s=one_hot_s, h0_t=one_hot_t, edges_s=edges_s, edges_t=edges_t, edge_attr=None, node_mask_s=atom_mask_s, 
+        #             edge_mask_s=edge_mask_s, n_nodes_s=n_nodes_s, node_mask_t=atom_mask_t, edge_mask_t=edge_mask_t, 
+        #             n_nodes_t=n_nodes_t, x_s=atom_positions_s, x_t=atom_positions_t)
+        pred = model(h0=[one_hot_s, one_hot_t], x=[atom_positions_s, atom_positions_t], all_edges=[edges_s, edges_t],
+                    all_edge_attr=[None, None], node_masks=[atom_mask_s, atom_mask_t],
+                    edge_masks=[edge_mask_s, edge_mask_t], n_nodes=[n_nodes_s, n_nodes_t], enviro=enviro)
         loss = loss_func(pred, label)
         error += loss.detach()
     return error
@@ -140,3 +153,4 @@ plt.plot(range(1, n_epochs), testing_loss,label='testing')
 plt.ylabel('MSE')
 plt.xlabel('Epochs')
 plt.legend()
+plt.savefig('result.png')
