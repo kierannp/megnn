@@ -47,13 +47,11 @@ model = MEGNN(n_graphs=2, in_node_nf=len(dat.elements), in_edge_nf=0, hidden_nf=
 # model = PairEGNN(in_node_nf=len(dat.elements), in_edge_nf=0, hidden_nf=128, device=device, n_layers=7, coords_weight=1.0,
 #              attention=False, node_attr=1)
 
-optimizer = optim.Adam(model.parameters(), lr=5e-4, weight_decay=1e-16)
-lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, n_epochs)
-loss_l1 = nn.L1Loss()
+optimizer = optim.Adam(model.parameters())
+loss = nn.MSELoss()
 
 
 def train(epoch, loader, partition='train'):
-    lr_scheduler.step()
     res = {'loss': 0, 'counter': 0, 'loss_arr':[]}
     for i, data in enumerate(loader):
         if partition == 'train':
@@ -100,15 +98,14 @@ def train(epoch, loader, partition='train'):
         #             edge_mask_s=edge_mask_s, n_nodes_s=n_nodes_s, node_mask_t=atom_mask_t, edge_mask_t=edge_mask_t, 
         #             n_nodes_t=n_nodes_t, x_s=atom_positions_s, x_t=atom_positions_t)
         if partition == 'train':
-            loss = loss_l1(pred, (label - prop_mean) / prop_mad)
+            loss = loss(pred, label)
             loss.backward()
             optimizer.step()
         else:
-            loss = loss_l1(prop_mad * pred + prop_mean, label)
+            loss = loss(prop_mad * pred + prop_mean, label)
 
-        res['loss'] += loss.item() * batch_size
+        res['loss'] += loss.item()
         res['counter'] += batch_size
-        res['loss_arr'].append(loss.item())
 
         prefix = ""
         if partition != 'train':

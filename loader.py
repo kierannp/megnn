@@ -61,7 +61,7 @@ class COF_Dataset(InMemoryDataset):
         if t1 in self.missing_mols or t2 in self.missing_mols:
             return
         else:
-            return (self.name2n_nodes[t1], self.name2n_nodes[t2])
+            return (self.smiles2n_nodes[t1], self.smiles2n_nodes[t2])
             
     def replace_n_nodes_tuple(self, row):
         return self.n_nodes_tuple(row['terminal_group_1'], row['terminal_group_2'])
@@ -70,7 +70,7 @@ class COF_Dataset(InMemoryDataset):
         if t1 in self.missing_mols or t2 in self.missing_mols:
             return
         else:
-            return (self.name2xyz[t1], self.name2xyz[t2])
+            return (self.smiles2xyz[t1], self.smiles2xyz[t2])
 
     def replace_positions(self, row):
         return self.get_positions(row['terminal_group_1'], row['terminal_group_2'])
@@ -79,14 +79,14 @@ class COF_Dataset(InMemoryDataset):
         if self.chem_name == 'difluoromethyl' or self.chem_name == 'phenol' or self.chem_name == 'toluene':
             return
         else:
-            return self.name2e_index[chem_name]
+            return self.smiles2e_index[chem_name]
 
     def replace_node_att(self, chem_name):
         if self.chem_name == 'difluoromethyl' or self.chem_name == 'phenol' or self.chem_name == 'toluene':
             return
         else:
-            x = torch.empty((len(self.elements),self.name2n_nodes[chem_name]), dtype=torch.int32)
-            for i, p in enumerate(self.name2mol[chem_name].particles()):
+            x = torch.empty((len(self.elements),self.smiles2n_nodes[chem_name]), dtype=torch.int32)
+            for i, p in enumerate(self.smiles2mol[chem_name].particles()):
                 x[i] = self.element2vec[p]
             return x
 
