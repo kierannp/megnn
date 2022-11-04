@@ -203,7 +203,8 @@ class COF_Dataset(InMemoryDataset):
         torch.save((data, slices), self.processed_paths[0])
 
 class Cloud_Point_Dataset(InMemoryDataset):
-    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None):
+    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, dataframe=None):
+        self.dataframe = dataframe
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
 
@@ -236,8 +237,6 @@ class Cloud_Point_Dataset(InMemoryDataset):
         return G
     
     def process(self):
-        data_path = './cloud_point.xlsx'
-        self.dataframe = pd.read_excel(data_path)
         uni_mols = {}
         elements = {}
         broken_smiles = []
@@ -344,8 +343,9 @@ class Cloud_Point_Dataset(InMemoryDataset):
                 positions_solv = torch.tensor(self.smiles2xyz[solvent_smiles])
                 n_nodes_solv = self.smiles2n_nodes[solvent_smiles]
                 p_data = PairData(edge_index_poly, x_poly, positions_poly, n_nodes_poly, 
-                edge_index_solv, x_solv, positions_solv, n_nodes_solv,  
-                y = torch.tensor(row['CP (C)']), enviro = torch.tensor(enviro).unsqueeze(1).reshape(1,len(enviro)))
+                                    edge_index_solv, x_solv, positions_solv, n_nodes_solv,  
+                                    y = torch.tensor(row['CP (C)']), 
+                                    enviro = torch.tensor(enviro).unsqueeze(1).reshape(1,len(enviro)))
                 data_list.append(p_data)
         if self.pre_filter is not None:
             data_list = [data for data in data_list if self.pre_filter(data)]
