@@ -1,4 +1,4 @@
-import glob
+from glob import glob
 import pandas as pd
 from gmso.external.convert_networkx import to_networkx
 from sympy import solve
@@ -12,6 +12,9 @@ from torch_geometric.data import InMemoryDataset
 from torch_geometric.data import Data
 from urllib.request import urlopen
 from urllib.parse import quote
+from rdkit.Chem import AllChem
+from rdkit import Chem
+import rdkit
 
 class PairData(Data):
     def __init__(self, edge_index_s=None, x_s=None, positions_s=None, 
@@ -104,7 +107,7 @@ class COF_Dataset(InMemoryDataset):
         self.dataframe = pd.read_csv(data_path, index_col=0)
         self.dataframe = self.dataframe[['terminal_group_1','terminal_group_2','terminal_group_3', 'backbone', 'frac-1','frac-2','COF','intercept']]
     
-        molecules = glob.glob('/Users/kieran/terminal_groups_mixed/src/util/molecules/*.pdb')
+        molecules = glob('/Users/kieran/terminal_groups_mixed/src/util/molecules/*.pdb')
         self.molecules = list(set(molecules))
         self.names2graph = {}
         self.mol_smiles = {}
@@ -210,7 +213,7 @@ class Cloud_Point_Dataset(InMemoryDataset):
 
     @property
     def raw_file_names(self):
-        return glob.glob('/Users/kieran/terminal_groups_mixed/src/util/molecules/*.pdb')
+        return glob('/Users/kieran/terminal_groups_mixed/src/util/molecules/*.pdb')
 
     @property
     def processed_file_names(self):
@@ -237,6 +240,8 @@ class Cloud_Point_Dataset(InMemoryDataset):
         return G
     
     def process(self):
+        data_path = './cloud_point.xlsx'
+        self.dataframe = pd.read_excel(data_path)
         uni_mols = {}
         elements = {}
         broken_smiles = []
@@ -347,6 +352,180 @@ class Cloud_Point_Dataset(InMemoryDataset):
                                     y = torch.tensor(row['CP (C)']), 
                                     enviro = torch.tensor(enviro).unsqueeze(1).reshape(1,len(enviro)))
                 data_list.append(p_data)
+        if self.pre_filter is not None:
+            data_list = [data for data in data_list if self.pre_filter(data)]
+        if self.pre_transform is not None:
+            data_list = [self.pre_transform(data) for data in data_list]
+        data, slices = self.collate(data_list)
+        torch.save((data, slices), self.processed_paths[0])
+
+
+class PdbBind_Dataset(InMemoryDataset):
+    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, dataframe=None):
+        self.dataframe = dataframe
+        super().__init__(root, transform, pre_transform, pre_filter)
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def raw_file_names(self):
+        return glob('/Users/kieran/terminal_groups_mixed/src/util/molecules/*.pdb')
+
+    @property
+    def processed_file_names(self):
+        return ['data.pt']
+
+    def download(self):
+        pass
+
+    def mol_to_nx(self, mol):
+        G = nx.Graph()
+
+        for atom in mol.GetAtoms():
+            G.add_node(atom.GetIdx(),
+                    atomic_num=atom.GetAtomicNum(),
+                    formal_charge=atom.GetFormalCharge(),
+                    chiral_tag=atom.GetChiralTag(),
+                    hybridization=atom.GetHybridization(),
+                    num_explicit_hs=atom.GetNumExplicitHs(),
+                    is_aromatic=atom.GetIsAromatic())
+        for bond in mol.GetBonds():
+            G.add_edge(bond.GetBeginAtomIdx(),
+                    bond.GetEndAtomIdx(),
+                    bond_type=bond.GetBondType())
+        return G
+    
+    def coordinate_from_mol(self, molecule):
+        molecule = Chem.AddHs(molecule)
+        AllChem.EmbedMolecule(molecule)
+        AllChem.UFFOptimizeMolecule(molecule)
+        molecule.GetConformer()
+        print()
+        coords = []
+        for i, atom in enumerate(molecule.GetAtoms()):
+            positions = molecule.GetConformer().GetAtomPosition(i)
+            coords.append([positions.x, positions.y, positions.z])
+        return coords
+        
+    def process_mol2(self, filename):
+        with open(filename) as f:
+            lines = f.readlines()
+            f.close()
+        
+        for i, l in enumerate(lines):
+            if 'TRIPOS>ATOM' in l:
+                atom_start_line = i+1
+            if 'TRIPOS>BOND' in l:
+                bond_start_line = i+1
+            if '@<TRIPOS>SUB' in l:
+                bond_end_line = i
+        coords = torch.empty((bond_start_line-atom_start_line-1, 3), dtype=torch.float32)
+        element_dict = {}
+        for i, l in enumerate(lines[atom_start_line:bond_start_line-1]):
+            parts = l.split()
+            
+            element = parts[5].split('.')[0]
+            element_dict[i] = element
+            vals = torch.tensor(list(map(float, parts[2:5])))
+            coords[i,:] = vals
+        edge_list = [[],[]]
+        for i, l in enumerate(lines[bond_start_line:bond_end_line]):
+            source, target = l.split()[1:3]
+            edge_list[0].append(int(source))
+            edge_list[1].append(int(target))
+
+        return element_dict, coords, edge_list
+
+    def process(self):
+        protein_names = []
+        diss_consts = {}
+        delinquints = []
+        all_elements = set()
+        unit_conversions = {'fM':10e-15, 'mM':10e-3, 'nM':10e-9, 'pM':10e-12, 'uM':10e-6}
+
+        # Read data into huge `Data` list.
+        data_list = []
+
+        with open('v2019-other-PL/index/INDEX_general_PL_data.2019') as f:
+            lines = f.readlines()
+            f.close()
+        for l in lines[6:]:
+            # Just taking the protein-ligand compounds that have Kd measurements
+            experiment_value = l.split()[4]
+            if 'Kd' in experiment_value:
+                if experiment_value[2] != '>' or experiment_value[2] != '<':
+                    if experiment_value[3:-2] != '=100':
+                        protein_names.append(l.split()[0])
+                        # Correct the units to standard Molarity units
+                        diss_consts[l.split()[0]] = float(experiment_value[3:-2]) * unit_conversions[experiment_value[-2:]]
+
+        for pname in protein_names:
+            files = glob('v2019-other-PL/'+pname+'/*')
+            for f in files:
+                if 'protein' in f:
+                    struc = mb.load(f)
+                    elements = set(p.element.symbol for p in struc)
+                elif 'ligand' in f and 'mol2' in f:
+                    element_dict, _, _= self.process_mol2(f)
+                    elements = set(element_dict.values())
+                else:
+                    continue
+                # if struc is None:
+                #     print('Unable to load: {}'.format(pname) )
+                #     delinquints.append(pname)
+                #     continue
+                # Add any new elements 
+                for a in elements:
+                    all_elements.add(a)
+
+        self.elements = all_elements
+        vecs = F.one_hot(torch.arange(0, len(self.elements)), num_classes=len(self.elements))
+        self.element2vec = {e:v for e, v in zip(self.elements, vecs)}
+
+        for pname in protein_names:
+            if pname not in delinquints:
+                files = glob('v2019-other-PL/'+pname+'/*')
+                for f in files:
+                    if 'protein' in f:
+                        prot = mb.load(f)
+                        G = nx.Graph(prot.bond_graph._adj)
+
+                        # Make Edgelist for the graph
+                        prot_edge_list = torch.empty((2,prot.n_bonds), dtype=torch.int64)
+                        parts = {p:i for i, p in enumerate(prot.particles())}
+                        for i, b in enumerate(prot.bonds()):
+                            prot_edge_list[0,i] = parts[b[0]]
+                            prot_edge_list[1,i] = parts[b[1]]
+
+                        # Make the coordinates for the molecule
+                        prot_coords = torch.tensor(prot.xyz)
+
+                        # Make the node features
+                        prot_x = torch.empty((prot.n_particles,len(self.elements)), dtype=torch.float32)
+                        for i, a in enumerate(prot):
+                            prot_x[i] = self.element2vec[a.element.symbol]
+
+                    if 'ligand' in f and 'mol2' in f:
+                        element_dict, ligand_coords, ligand_edge_list = self.process_mol2(f)
+                        # adj = nx.adjacency_matrix(G)
+                        # e_index = torch.empty((2,mol.n_bonds), dtype=torch.int64)
+
+                        # Make Edgelist for the graph
+                        ligand_edge_list = torch.tensor(ligand_edge_list)
+
+                        # Make the coordinates for the molecule
+                        ligand_coords = torch.tensor(ligand_coords)
+
+                        # Make the node features
+                        ligand_x = torch.empty((len(element_dict),len(self.elements)), dtype=torch.float32)
+                        for i, a in enumerate(element_dict.values()):
+                            ligand_x[i] = self.element2vec[a]
+
+                p_data = PairData(prot_edge_list, prot_x, prot_coords, prot_coords.size(0), 
+                                    ligand_edge_list, ligand_x, ligand_coords, ligand_coords.size(0),  
+                                    y = torch.tensor(diss_consts[pname]))
+                data_list.append(p_data)
+
+
         if self.pre_filter is not None:
             data_list = [data for data in data_list if self.pre_filter(data)]
         if self.pre_transform is not None:

@@ -165,6 +165,65 @@ class PairEGNN(nn.Module):
 
 class MEGNN(nn.Module):
     def __init__(self, n_graphs, in_node_nf, in_edge_nf, hidden_nf, device, act_fn=nn.SiLU(), 
+                n_layers=7, coords_weight=1.0, attention=True, node_attr=1):
+        super(MEGNN, self).__init__()
+        self.hidden_nf = hidden_nf
+        self.device = device
+        self.n_layers = n_layers
+        self.n_graphs = n_graphs
+
+        ### Encoder
+        self.embedding = nn.Linear(in_node_nf, hidden_nf)
+        self.node_attr = node_attr
+        if node_attr:
+            n_node_attr = in_node_nf
+        else:
+            n_node_attr = 0
+        for j in range(n_graphs):
+            for i in range(n_layers):
+                self.add_module("gcl_{}_{}".format(j,i), E_GCL_mask(self.hidden_nf, self.hidden_nf, self.hidden_nf, edges_in_d=in_edge_nf, nodes_attr_dim=n_node_attr, act_fn=act_fn, recurrent=True, coords_weight=coords_weight, attention=attention))
+
+        for i in range(n_graphs):
+            self.add_module("node_dec_{}".format(i), nn.Sequential( nn.Linear(self.hidden_nf, self.hidden_nf),
+                                                                    act_fn,
+                                                                    nn.Linear(self.hidden_nf, self.hidden_nf)))
+        self.add_module("grand_dec", nn.Sequential(nn.Linear(n_graphs * self.hidden_nf, n_graphs * self.hidden_nf),
+                                    act_fn,
+                                    nn.Linear(n_graphs * self.hidden_nf, 1)))
+        self.to(self.device)
+
+    def forward(self, h0, x, all_edges, all_edge_attr, node_masks, edge_masks, n_nodes, enviro=None):
+        hf = []
+        for j in range(self.n_graphs):
+            h = self.embedding(h0[j])
+            node_mask = node_masks[j]
+            edge_mask = edge_masks[j]
+            edges = all_edges[j]
+            node_attr = h0[j]
+            x_curr = x[j]
+            n_node = n_nodes[j]
+            if all_edge_attr is not None:
+                edge_attr = all_edge_attr[j]
+            else:
+                edge_attr = None
+            for i in range(0, self.n_layers):
+                if self.node_attr:
+                    h, _, _ = self._modules["gcl_{}_{}".format(j,i)](h, edges, x_curr, node_mask, edge_mask, edge_attr=edge_attr, node_attr=node_attr, n_nodes=n_node)
+                else:
+                    h, _, _ = self._modules["gcl_{}_{}".format(j,i)](h, edges, x_curr, node_mask, edge_mask, edge_attr=edge_attr,
+                                                        node_attr=None, n_nodes=n_nodes)
+            h = self._modules["node_dec_{}".format(j)](h)
+            h = h * node_mask
+            h = h.view(-1, n_node, self.hidden_nf)
+            h = torch.sum(h, dim=1)
+            hf.append(h)
+        # pred = self.grand_dec(torch.cat(hf, dim=1)) if enviro is None else self.grand_dec(torch.cat((hf,enviro_out), dim=1))
+        combined = torch.cat(hf, dim=1)
+        pred = self.grand_dec(combined)
+        return pred.squeeze(1)
+        
+class MEGNN_enviro(nn.Module):
+    def __init__(self, n_graphs, in_node_nf, in_edge_nf, hidden_nf, device, act_fn=nn.SiLU(), 
                 n_layers=7, coords_weight=1.0, attention=True, node_attr=1, n_enviro = 0):
         super(MEGNN, self).__init__()
         self.hidden_nf = hidden_nf
