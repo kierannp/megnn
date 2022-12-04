@@ -19,6 +19,23 @@ import rdkit
 class PairData(Data):
     def __init__(self, edge_index_s=None, x_s=None, positions_s=None, 
                 n_nodes_s=None,edge_index_t=None, x_t=None, positions_t=None,
+                n_nodes_t=None, y=None):
+        super().__init__()
+        self.edge_index_s = edge_index_s
+        self.x_s = x_s
+        self.positions_s = positions_s
+        self.n_nodes_s = n_nodes_s
+
+        self.edge_index_t = edge_index_t
+        self.x_t = x_t
+        self.positions_t = positions_t
+        self.n_nodes_t = n_nodes_t
+
+        self.y = y
+
+class PairDataEnviro(Data):
+    def __init__(self, edge_index_s=None, x_s=None, positions_s=None, 
+                n_nodes_s=None,edge_index_t=None, x_t=None, positions_t=None,
                 n_nodes_t=None, y=None, enviro = None):
         super().__init__()
         self.edge_index_s = edge_index_s
@@ -34,7 +51,6 @@ class PairData(Data):
         self.enviro = enviro
 
         self.y = y
-
     # def __inc__(self, key, value, *args, **kwargs):
     #     if key == 'edge_index_s':
     #         return self.x_s.size(0)
@@ -438,14 +454,13 @@ class PdbBind_Dataset(InMemoryDataset):
     def process(self):
         protein_names = []
         diss_consts = {}
-        delinquints = []
+        delinquints = set()
         all_elements = set()
         unit_conversions = {'fM':10e-15, 'mM':10e-3, 'nM':10e-9, 'pM':10e-12, 'uM':10e-6}
-
+        acceptable_elements = {'N', 'Zn', 'O', 'P', 'C', 'F', 'H', 'Cl', 'S'}
         # Read data into huge `Data` list.
         data_list = []
-
-        with open('v2019-other-PL/index/INDEX_general_PL_data.2019') as f:
+        with open('./v2019-other-PL/index/INDEX_general_PL_data.2019') as f:
             lines = f.readlines()
             f.close()
         for l in lines[6:]:
@@ -459,9 +474,9 @@ class PdbBind_Dataset(InMemoryDataset):
                         diss_consts[l.split()[0]] = float(experiment_value[3:-2]) * unit_conversions[experiment_value[-2:]]
 
         for pname in protein_names:
-            files = glob('v2019-other-PL/'+pname+'/*')
+            files = glob('./v2019-other-PL/'+pname+'/*')
             for f in files:
-                if 'protein' in f:
+                if 'pocket' in f:
                     struc = mb.load(f)
                     elements = set(p.element.symbol for p in struc)
                 elif 'ligand' in f and 'mol2' in f:
@@ -469,10 +484,10 @@ class PdbBind_Dataset(InMemoryDataset):
                     elements = set(element_dict.values())
                 else:
                     continue
-                # if struc is None:
-                #     print('Unable to load: {}'.format(pname) )
-                #     delinquints.append(pname)
-                #     continue
+                if not elements.issubset(acceptable_elements) or struc.n_particles>500:
+                    print('Unable to load: {}'.format(pname) )
+                    delinquints.add(pname)
+                    continue
                 # Add any new elements 
                 for a in elements:
                     all_elements.add(a)
@@ -483,11 +498,11 @@ class PdbBind_Dataset(InMemoryDataset):
 
         for pname in protein_names:
             if pname not in delinquints:
-                files = glob('v2019-other-PL/'+pname+'/*')
+                files = glob('./v2019-other-PL/'+pname+'/*')
                 for f in files:
-                    if 'protein' in f:
+                    if 'pocket' in f:
                         prot = mb.load(f)
-                        G = nx.Graph(prot.bond_graph._adj)
+                        # G = nx.Graph(prot.bond_graph._adj)
 
                         # Make Edgelist for the graph
                         prot_edge_list = torch.empty((2,prot.n_bonds), dtype=torch.int64)
@@ -513,7 +528,7 @@ class PdbBind_Dataset(InMemoryDataset):
                         ligand_edge_list = torch.tensor(ligand_edge_list)
 
                         # Make the coordinates for the molecule
-                        ligand_coords = torch.tensor(ligand_coords)
+                        ligand_coords = ligand_coords.clone()
 
                         # Make the node features
                         ligand_x = torch.empty((len(element_dict),len(self.elements)), dtype=torch.float32)
