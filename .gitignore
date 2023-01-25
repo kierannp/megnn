@@ -1,6 +1,10 @@
 SolCuration
 forward-pred
 processed
+v2019-other-PL/
+*.png
+.vscode/
+.DS_Store
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
