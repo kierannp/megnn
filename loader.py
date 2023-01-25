@@ -15,6 +15,7 @@ from urllib.parse import quote
 from rdkit.Chem import AllChem
 from rdkit import Chem
 import rdkit
+import math
 
 class PairData(Data):
     def __init__(self, edge_index_s=None, x_s=None, positions_s=None, 
@@ -66,7 +67,7 @@ class COF_Dataset(InMemoryDataset):
 
     @property
     def raw_file_names(self):
-        return glob.glob('/Users/kieran/terminal_groups_mixed/src/util/molecules/*.pdb')
+        return glob('~/projects/terminal_groups_mixed/src/util/molecules/*.pdb')
 
     @property
     def processed_file_names(self):
@@ -119,11 +120,11 @@ class COF_Dataset(InMemoryDataset):
         return ans
 
     def process(self):
-        data_path = '/Users/kieran/iMoDELS-supplements/data/raw-data/everything.csv'
+        data_path = '~/projects/iMoDELS-supplements/data/raw-data/everything.csv'
         self.dataframe = pd.read_csv(data_path, index_col=0)
         self.dataframe = self.dataframe[['terminal_group_1','terminal_group_2','terminal_group_3', 'backbone', 'frac-1','frac-2','COF','intercept']]
     
-        molecules = glob('/Users/kieran/terminal_groups_mixed/src/util/molecules/*.pdb')
+        molecules = glob('~/projects/terminal_groups_mixed/src/util/molecules/*.pdb')
         self.molecules = list(set(molecules))
         self.names2graph = {}
         self.mol_smiles = {}
@@ -229,7 +230,7 @@ class Cloud_Point_Dataset(InMemoryDataset):
 
     @property
     def raw_file_names(self):
-        return glob('/Users/kieran/terminal_groups_mixed/src/util/molecules/*.pdb')
+        return glob('~/projects/terminal_groups_mixed/src/util/molecules/*.pdb')
 
     @property
     def processed_file_names(self):
@@ -384,7 +385,7 @@ class PdbBind_Dataset(InMemoryDataset):
 
     @property
     def raw_file_names(self):
-        return glob('/Users/kieran/terminal_groups_mixed/src/util/molecules/*.pdb')
+        return glob('~/projects/terminal_groups_mixed/src/util/molecules/*.pdb')
 
     @property
     def processed_file_names(self):
@@ -471,7 +472,7 @@ class PdbBind_Dataset(InMemoryDataset):
                     if experiment_value[3:-2] != '=100':
                         protein_names.append(l.split()[0])
                         # Correct the units to standard Molarity units
-                        diss_consts[l.split()[0]] = float(experiment_value[3:-2]) * unit_conversions[experiment_value[-2:]]
+                        diss_consts[l.split()[0]] = math.log(float(experiment_value[3:-2]) * unit_conversions[experiment_value[-2:]])
 
         for pname in protein_names:
             files = glob('./v2019-other-PL/'+pname+'/*')

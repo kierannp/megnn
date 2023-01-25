@@ -63,7 +63,7 @@ print(model)
 
 optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-16)
 lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, n_epochs)
-criterion = nn.L1Loss()
+criterion = nn.L2Loss()
 
 
 def train(epoch, loader):
@@ -114,7 +114,7 @@ def train(epoch, loader):
 
         if i % 10 == 0:
             print("Epoch %d \t Iteration %d \t loss %.4f" % (epoch, i, loss.item()))
-    return epoch_loss
+    return epoch_loss/len(loader)
     
 def test(loader):
     model.eval()
@@ -156,7 +156,7 @@ def test(loader):
         # epoch_loss += criterion(pred, (label - prop_mean) / prop_mad).item()*batch_size
         epoch_loss += criterion(pred, label).item()*batch_size_s
 
-    return epoch_loss
+    return epoch_loss /len(loader)
 
 res = {'epochs': [], 'train_loss': [],'test_loss': [], 'best_val': 1e10, 'best_test': 1e10, 'best_epoch': 0}
 

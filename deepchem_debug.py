@@ -18,6 +18,16 @@ sys.path.insert(1, '~/egnn_cof')
 # from easydict import EasyDict as edict
 import torch
 from torch import nn, optim
+
+# example of bayesian optimization with scikit-optimize
+from numpy import mean
+from sklearn.datasets import make_blobs
+from sklearn.model_selection import cross_val_score
+from sklearn.neighbors import KNeighborsClassifier
+from skopt.space import Integer, Categorical
+from skopt.utils import use_named_args
+from skopt import gp_minimize
+ 
 # My imports
 from loader import *
 from megnn import *
@@ -33,7 +43,7 @@ except:
 
 
 
-n_epochs  = 5
+n_epochs  = 10
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 #device = torch.device('cpu')
 # Remove cached cuda memory
@@ -42,7 +52,7 @@ if torch.cuda.is_available():
 dtype = torch.float32
 dat = PdbBind_Dataset(root='.')
 print('Loaded the dataset')
-batch_size = 1
+batch_size = 2
 
 dat.shuffle()
 train_percent = .8
@@ -55,6 +65,36 @@ valid_dataset = dat[test_stop:]
 train_loader = DataLoader(train_dataset, batch_size=batch_size, follow_batch=['x_s', 'x_t', 'positions_s', 'positions_t'], shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, follow_batch=['x_s', 'x_t','positions_s', 'positions_t'], shuffle=False)
 valid_loader = DataLoader(valid_dataset, batch_size=batch_size, follow_batch=['x_s', 'x_t','positions_s', 'positions_t'], shuffle=False)
+
+# generate 2d classification dataset
+X, y = make_blobs(n_samples=500, centers=3, n_features=2)
+# define the model
+model = KNeighborsClassifier()
+# define the space of hyperparameters to search
+# define the space of hyperparameters to search
+search_space = [
+                    Integer(8, 128, name='hidden_nf'),
+                    Integer(1, 8, name='n_layers'), 
+                    Categorical([nn.ReLU(),nn.SiLU(), nn.LeakyReLU()],name='act_func'),
+                    Categorical([True, False],name='attention')
+                ]
+ 
+# define the function used to evaluate a given configuration
+@use_named_args(search_space)
+def evaluate_model(**params):
+    # calculate 5-fold cross validation
+    result = cross_val_score(model, X, y, cv=5, n_jobs=-1, scoring='accuracy')
+    # calculate the mean of the scores
+    estimate = mean(result)
+    return 1.0 - estimate
+ 
+# perform optimization
+result = gp_minimize(evaluate_model, search_space)
+# summarizing finding:
+print('Best Accuracy: %.3f' % (1.0 - result.fun))
+print('Best Parameters: n_neighbors=%d, p=%d' % (result.x[0], result.x[1]))
+
+
 
 model = MEGNN(n_graphs=2, in_node_nf=dat.data.x_s.size(1), in_edge_nf=0, hidden_nf=32, device=device, n_layers=3, coords_weight=1.0,
              attention=True, node_attr=1)
@@ -156,6 +196,8 @@ for epoch in range(1, n_epochs):
     training_loss.append(train_loss)
     testing_loss.append(test_loss)
     print(f'Epoch: {epoch:03d}, Train MSE: {train_loss:.4f}, Test MSE: {test_loss:.4f}')
+
+torch.save(model.state_dict(), './models/model.pth')
 
 plt.figure(figsize=(12,6))
 plt.plot(range(1, n_epochs), training_loss,label='training')
