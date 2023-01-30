@@ -1,3 +1,4 @@
+import os
 from glob import glob
 import pandas as pd
 from gmso.external.convert_networkx import to_networkx
@@ -123,8 +124,8 @@ class COF_Dataset(InMemoryDataset):
         data_path = '~/projects/iMoDELS-supplements/data/raw-data/everything.csv'
         self.dataframe = pd.read_csv(data_path, index_col=0)
         self.dataframe = self.dataframe[['terminal_group_1','terminal_group_2','terminal_group_3', 'backbone', 'frac-1','frac-2','COF','intercept']]
-    
-        molecules = glob('~/projects/terminal_groups_mixed/src/util/molecules/*.pdb')
+        home = os.path.expanduser('~')
+        molecules = glob(home + '/projects/terminal_groups_mixed/src/util/molecules/*')
         self.molecules = list(set(molecules))
         self.names2graph = {}
         self.mol_smiles = {}
@@ -141,9 +142,12 @@ class COF_Dataset(InMemoryDataset):
         self.mol_smiles['fluorophenyl'] = 'CC1=CC=C(F)C=C1'
         self.mol_smiles['carboxyl'] = '*C(=O)O'
         self.mol_smiles['amino'] = 'CN'
+        self.mol_smiles['acetyl'] = 'C[C]=O'
 
         for ids in set(self.dataframe['terminal_group_1']):
             try:
+                if ids in self.mol_smiles:
+                    continue
                 self.mol_smiles[ids] = self.CIRconvert(ids)
             except:
                 pass
@@ -156,7 +160,7 @@ class COF_Dataset(InMemoryDataset):
         vecs = F.one_hot(torch.arange(0, len(self.elements)), num_classes=len(self.elements))
         self.element2vec = {e:v for e, v in zip(self.elements, vecs)}
 
-        for m in molecules:
+        for m in self.molecules:
             mol_name = m.split('/')[-1].split('.')[0]
             if 'ch3' in mol_name:
                 mol_name = mol_name.split('-')[0]
