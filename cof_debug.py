@@ -26,7 +26,7 @@ except:
 
 # hyperparameters
 n_epochs  = 30
-device = torch.device("cpu")
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 dtype = torch.float32
 batch_size = 32
 

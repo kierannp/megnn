@@ -380,7 +380,6 @@ class Cloud_Point_Dataset(InMemoryDataset):
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
 
-
 class PdbBind_Dataset(InMemoryDataset):
     def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, dataframe=None):
         self.dataframe = dataframe
