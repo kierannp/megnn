@@ -1,1 +1,1 @@
-# multi-egnn
+# megnn
