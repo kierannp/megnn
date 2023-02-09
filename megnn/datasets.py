@@ -2,7 +2,6 @@ import os
 from glob import glob
 import pandas as pd
 from gmso.external.convert_networkx import to_networkx
-from sympy import solve
 import torch
 import torch.nn.functional as F
 import mbuild as mb
@@ -35,24 +34,6 @@ class PairData(Data):
 
         self.y = y
 
-class PairDataEnviro(Data):
-    def __init__(self, edge_index_s=None, x_s=None, positions_s=None, 
-                n_nodes_s=None,edge_index_t=None, x_t=None, positions_t=None,
-                n_nodes_t=None, y=None, enviro = None):
-        super().__init__()
-        self.edge_index_s = edge_index_s
-        self.x_s = x_s
-        self.positions_s = positions_s
-        self.n_nodes_s = n_nodes_s
-
-        self.edge_index_t = edge_index_t
-        self.x_t = x_t
-        self.positions_t = positions_t
-        self.n_nodes_t = n_nodes_t
-
-        self.enviro = enviro
-
-        self.y = y
     # def __inc__(self, key, value, *args, **kwargs):
     #     if key == 'edge_index_s':
     #         return self.x_s.size(0)
@@ -123,7 +104,7 @@ class COF_Dataset(InMemoryDataset):
     def process(self):
         data_path = '~/projects/iMoDELS-supplements/data/raw-data/everything.csv'
         self.dataframe = pd.read_csv(data_path, index_col=0)
-        self.dataframe = self.dataframe[['terminal_group_1','terminal_group_2','terminal_group_3', 'backbone', 'frac-1','frac-2','COF','intercept']]
+        features = self.dataframe.drop(['terminal_group_1','terminal_group_2','terminal_group_3', 'backbone','chainlength', 'frac-1','frac-2','COF','intercept', 'COF-std', 'intercept-std'], axis=1, inplace=False)
         home = os.path.expanduser('~')
         molecules = glob(home + '/projects/terminal_groups_mixed/src/util/molecules/*')
         self.molecules = list(set(molecules))
@@ -198,27 +179,25 @@ class COF_Dataset(InMemoryDataset):
         for i, row in self.dataframe.iterrows():  # Iterate in batches over the training dataset.
             if row.terminal_group_1 in self.missing_mols or row.terminal_group_2 in self.missing_mols:
                 continue
-
             x_s = torch.tensor(self.smiles2x[row.terminal_group_1])
-            # x_s = F.pad(x_s, (0,0,0,max_nodes_s-x_s.size()[0]))
+            other_features = torch.tensor(row[features.columns]).reshape(1,len(features.columns))
+            other_features = other_features.expand(x_s.size(0), len(features.columns))
+            x_s = torch.cat((x_s,other_features), 1)
             edge_index_s = self.smiles2e_index[row.terminal_group_1]
-            # edge_index_s = F.pad(edge_index_s, (0, max_edges_s - edge_index_s.size()[1]))
             positions_s = torch.tensor(self.smiles2xyz[row.terminal_group_1])
-            # positions_s = F.pad(positions_s, (0, 0, 0, max_nodes_s - positions_s.size()[0]))
             n_nodes_s = self.smiles2n_nodes[row.terminal_group_1]
-
             x_t = torch.tensor(self.smiles2x[row.terminal_group_2])
-            # x_t = F.pad(x_t, (0,0,0,max_nodes_t-x_t.size()[0]))
+            other_features = torch.tensor(row[features.columns]).reshape(1,len(features.columns))
+            other_features = other_features.expand(x_t.size(0), len(features.columns))
+            x_t = torch.cat((x_t, other_features), 1)
             edge_index_t = self.smiles2e_index[row.terminal_group_2]
-            # edge_index_t = F.pad(edge_index_t, (0, max_edges_t - edge_index_t.size()[1]))
             positions_t = torch.tensor(self.smiles2xyz[row.terminal_group_2])
-            # positions_t = F.pad(positions_t, (0, 0, 0, max_nodes_t - positions_t.size()[0]))
             n_nodes_t = self.smiles2n_nodes[row.terminal_group_2]
             # print('x_s:{}, x_t:{}, e_s:{}, e_t:{}, p_s:{}, p_t:{}'.format(x_s.size(),x_t.size(),edge_index_s.size(), edge_index_t.size(),positions_s.size(),positions_t.size()))
 
-
             p_data = PairData(edge_index_s, x_s, positions_s, n_nodes_s, edge_index_t, x_t, positions_t, n_nodes_t,  y = torch.tensor(row.COF))
             data_list.append(p_data)
+
         if self.pre_filter is not None:
             data_list = [data for data in data_list if self.pre_filter(data)]
         if self.pre_transform is not None:
