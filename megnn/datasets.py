@@ -8,6 +8,7 @@ import mbuild as mb
 import rdkit.Chem as Chem
 import parmed as pmd
 import networkx as nx
+import numpy as np
 from torch_geometric.data import InMemoryDataset
 from torch_geometric.data import Data
 from urllib.request import urlopen
@@ -16,6 +17,10 @@ from rdkit.Chem import AllChem
 from rdkit import Chem
 import rdkit
 import math
+import random
+import sys
+sys.path.insert(1, '~/projects/megnn')
+from megnn.utils import *
 
 class PairData(Data):
     def __init__(self, edge_index_s=None, x_s=None, positions_s=None, 
@@ -107,6 +112,9 @@ class COF_Dataset(InMemoryDataset):
         features = self.dataframe.drop(['terminal_group_1','terminal_group_2','terminal_group_3', 'backbone','chainlength', 'frac-1','frac-2','COF','intercept', 'COF-std', 'intercept-std'], axis=1, inplace=False)
         home = os.path.expanduser('~')
         molecules = glob(home + '/projects/terminal_groups_mixed/src/util/molecules/*')
+        self.mean = self.dataframe['COF'].mean()
+        self.std = self.dataframe['COF'].std()
+        self.dataframe['COF'] = (self.dataframe['COF']-self.mean)/self.std
         self.molecules = list(set(molecules))
         self.names2graph = {}
         self.mol_smiles = {}
@@ -193,7 +201,7 @@ class COF_Dataset(InMemoryDataset):
             edge_index_t = self.smiles2e_index[row.terminal_group_2]
             positions_t = torch.tensor(self.smiles2xyz[row.terminal_group_2])
             n_nodes_t = self.smiles2n_nodes[row.terminal_group_2]
-            # print('x_s:{}, x_t:{}, e_s:{}, e_t:{}, p_s:{}, p_t:{}'.format(x_s.size(),x_t.size(),edge_index_s.size(), edge_index_t.size(),positions_s.size(),positions_t.size()))
+            print('x_s:{}, x_t:{}, e_s:{}, e_t:{}, p_s:{}, p_t:{}'.format(x_s.size(),x_t.size(),edge_index_s.size(), edge_index_t.size(),positions_s.size(),positions_t.size()))
 
             p_data = PairData(edge_index_s, x_s, positions_s, n_nodes_s, edge_index_t, x_t, positions_t, n_nodes_t,  y = torch.tensor(row.COF))
             data_list.append(p_data)
@@ -362,6 +370,7 @@ class Cloud_Point_Dataset(InMemoryDataset):
 class PdbBind_Dataset(InMemoryDataset):
     def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, dataframe=None):
         self.dataframe = dataframe
+        self.root = root
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
 
@@ -375,23 +384,6 @@ class PdbBind_Dataset(InMemoryDataset):
 
     def download(self):
         pass
-
-    def mol_to_nx(self, mol):
-        G = nx.Graph()
-
-        for atom in mol.GetAtoms():
-            G.add_node(atom.GetIdx(),
-                    atomic_num=atom.GetAtomicNum(),
-                    formal_charge=atom.GetFormalCharge(),
-                    chiral_tag=atom.GetChiralTag(),
-                    hybridization=atom.GetHybridization(),
-                    num_explicit_hs=atom.GetNumExplicitHs(),
-                    is_aromatic=atom.GetIsAromatic())
-        for bond in mol.GetBonds():
-            G.add_edge(bond.GetBeginAtomIdx(),
-                    bond.GetEndAtomIdx(),
-                    bond_type=bond.GetBondType())
-        return G
     
     def coordinate_from_mol(self, molecule):
         molecule = Chem.AddHs(molecule)
@@ -422,8 +414,8 @@ class PdbBind_Dataset(InMemoryDataset):
         for i, l in enumerate(lines[atom_start_line:bond_start_line-1]):
             parts = l.split()
             
-            element = parts[5].split('.')[0]
-            element_dict[i] = element
+            element, charge = parts[5].split('.')[0], parts[8].split('.')[0]
+            element_dict[i] = (element, float(charge))
             vals = torch.tensor(list(map(float, parts[2:5])))
             coords[i,:] = vals
         edge_list = [[],[]]
@@ -433,17 +425,19 @@ class PdbBind_Dataset(InMemoryDataset):
             edge_list[1].append(int(target))
 
         return element_dict, coords, edge_list
-
+        
     def process(self):
-        protein_names = []
+        protein_names = set()
         diss_consts = {}
         delinquints = set()
         all_elements = set()
         unit_conversions = {'fM':10e-15, 'mM':10e-3, 'nM':10e-9, 'pM':10e-12, 'uM':10e-6}
         acceptable_elements = {'N', 'Zn', 'O', 'P', 'C', 'F', 'H', 'Cl', 'S'}
-        # Read data into huge `Data` list.
+        mass_to_element = {14:'N', 65:'Zn', 16:'O', 31:'P', 12:'C', 19:'F', 1:'H', 35:'Cl', 32:'S'}
         data_list = []
-        with open('./v2019-other-PL/index/INDEX_general_PL_data.2019') as f:
+
+        ############### Process index file that has K_d #########################
+        with open('{}/index/INDEX_general_PL_data.2019'.format(self.root)) as f:
             lines = f.readlines()
             f.close()
         for l in lines[6:]:
@@ -452,24 +446,31 @@ class PdbBind_Dataset(InMemoryDataset):
             if 'Kd' in experiment_value:
                 if experiment_value[2] != '>' or experiment_value[2] != '<':
                     if experiment_value[3:-2] != '=100':
-                        protein_names.append(l.split()[0])
+                        protein_names.add(l.split()[0])
                         # Correct the units to standard Molarity units
                         diss_consts[l.split()[0]] = math.log(float(experiment_value[3:-2]) * unit_conversions[experiment_value[-2:]])
 
+        # protein_names = random.sample(protein_names, 50)
+        ############### Add all element types #########################
         for pname in protein_names:
-            files = glob('./v2019-other-PL/'+pname+'/*')
+            files = glob('{}/{}/*'.format(self.root, pname))
+            
             for f in files:
                 if 'pocket' in f:
                     struc = mb.load(f)
                     elements = set(p.element.symbol for p in struc)
+                    if not elements.issubset(acceptable_elements) or struc.n_particles>500:
+                        print('Unable to load: {}'.format(pname) )
+                        delinquints.add(pname)
+                        continue
                 elif 'ligand' in f and 'mol2' in f:
                     element_dict, _, _= self.process_mol2(f)
-                    elements = set(element_dict.values())
+                    elements = {e[0] for e in element_dict.values()}
+                    if not elements.issubset(acceptable_elements) or len(element_dict)>500:
+                        print('Unable to load: {}'.format(pname) )
+                        delinquints.add(pname)
+                        continue
                 else:
-                    continue
-                if not elements.issubset(acceptable_elements) or struc.n_particles>500:
-                    print('Unable to load: {}'.format(pname) )
-                    delinquints.add(pname)
                     continue
                 # Add any new elements 
                 for a in elements:
@@ -478,34 +479,79 @@ class PdbBind_Dataset(InMemoryDataset):
         self.elements = all_elements
         vecs = F.one_hot(torch.arange(0, len(self.elements)), num_classes=len(self.elements))
         self.element2vec = {e:v for e, v in zip(self.elements, vecs)}
-
+        
+        ############### Process graphs #########################
         for pname in protein_names:
             if pname not in delinquints:
-                files = glob('./v2019-other-PL/'+pname+'/*')
+                files = glob('{}/{}/*'.format(self.root, pname))
+
+                if len(files) == 0:
+                    print('{} files not exist'.format(pname))
+                    continue
+                prot_edge_list, ligand_edge_list = None, None
                 for f in files:
                     if 'pocket' in f:
-                        prot = mb.load(f)
-                        # G = nx.Graph(prot.bond_graph._adj)
+                        if not os.path.exists('{}/{}/topol.top'.format(self.root, pname)):
+                            success = atomtype(f, self.root, pname)
+                            if not success:
+                                break
+                        with open('{}/{}/topol.top'.format(self.root, pname)) as topfile:
+                            top_lines = topfile.readlines()
+                            topfile.close()
+                        if not os.path.exists('{}/{}/conf.gro'.format(self.root, pname)):
+                            continue
+                        with open('{}/{}/conf.gro'.format(self.root, pname)) as grofile:
+                            gro_lines = grofile.readlines()
+                            grofile.close()
+                        
+                        if len(glob('{}/{}/topol_Protein*'.format(self.root, pname))) > 0:
+                            continue
+                        atom_start = next(i + 2 for i, l in enumerate(top_lines) if '[ atoms ]' in l)
+                        atom_stop = next(i - 1 for i, l in enumerate(top_lines) if '[ bonds ]' in l)
+                        bond_start = next(i + 2 for i, l in enumerate(top_lines) if '[ bonds ]' in l)
+                        bond_stop = next(i - 1 for i, l in enumerate(top_lines) if '[ pairs ]' in l)
+                        bond_stop = next(i - 1 for i, l in enumerate(top_lines) if '[ pairs ]' in l)
+                        pair_start = next(i + 1 for i, l in enumerate(top_lines) if '[ pairs ]' in l)
+                        pair_stop = next(i - 1 for i, l in enumerate(top_lines) if '[ angles ]' in l)
 
                         # Make Edgelist for the graph
-                        prot_edge_list = torch.empty((2,prot.n_bonds), dtype=torch.int64)
-                        parts = {p:i for i, p in enumerate(prot.particles())}
-                        for i, b in enumerate(prot.bonds()):
-                            prot_edge_list[0,i] = parts[b[0]]
-                            prot_edge_list[1,i] = parts[b[1]]
+                        prot_edge_list = torch.empty((2, bond_stop-bond_start), dtype=torch.int64)
 
+                        for i, l in enumerate(top_lines[bond_start:bond_stop]):
+                            source, dest, _ = l.split()
+                            prot_edge_list[0,i] = int(source)
+                            prot_edge_list[1,i] = int(dest)
+            
+                        
                         # Make the coordinates for the molecule
-                        prot_coords = torch.tensor(prot.xyz)
+                        prot_coords = torch.empty((len(gro_lines[2:-1]), 3),dtype=torch.float32)
+                        nbr_to_res = {}
+                        nbr_to_atype = {}
+                        for i, l in enumerate(gro_lines[2:-1]):
+                            res, atype, nbr, x, y, z = l.split()
+                            nbr_to_res[int(nbr)] = res
+                            nbr_to_atype[int(nbr)] = atype
+
+                            x, y, z = float(x), float(y), float(z)
+                            prot_coords[i] = torch.tensor((x, y, z))
 
                         # Make the node features
-                        prot_x = torch.empty((prot.n_particles,len(self.elements)), dtype=torch.float32)
-                        for i, a in enumerate(prot):
-                            prot_x[i] = self.element2vec[a.element.symbol]
+                        prot_x = torch.empty((len(gro_lines[2:-1]), len(self.elements) + 1), dtype=torch.float32)
+                        i = 0
+                        for l in top_lines[atom_start:atom_stop]:
+                            if 'residue' in l:
+                                continue
+                            if 'qtot' in l:
+                                nbr, atype, res, _, atom, _, charge, mass, _, _, _ = l.split()
+                            else:
+                                nbr, atype, res, _, atom, _, charge, mass = l.split()
+                            charge, mass = torch.tensor([float(charge)]), float(mass)
+                            ele = mass_to_element[round(mass)]
 
+                            prot_x[i] = torch.cat((self.element2vec[ele], charge), 0)
+                            i += 1
                     if 'ligand' in f and 'mol2' in f:
                         element_dict, ligand_coords, ligand_edge_list = self.process_mol2(f)
-                        # adj = nx.adjacency_matrix(G)
-                        # e_index = torch.empty((2,mol.n_bonds), dtype=torch.int64)
 
                         # Make Edgelist for the graph
                         ligand_edge_list = torch.tensor(ligand_edge_list)
@@ -514,14 +560,17 @@ class PdbBind_Dataset(InMemoryDataset):
                         ligand_coords = ligand_coords.clone()
 
                         # Make the node features
-                        ligand_x = torch.empty((len(element_dict),len(self.elements)), dtype=torch.float32)
+                        ligand_x = torch.empty((len(element_dict),len(self.elements)+1), dtype=torch.float32)
                         for i, a in enumerate(element_dict.values()):
-                            ligand_x[i] = self.element2vec[a]
+                            ligand_x[i] = torch.cat( (self.element2vec[a[0]], torch.tensor([a[1]])), dim=0)
 
-                p_data = PairData(prot_edge_list, prot_x, prot_coords, prot_coords.size(0), 
-                                    ligand_edge_list, ligand_x, ligand_coords, ligand_coords.size(0),  
-                                    y = torch.tensor(diss_consts[pname]))
-                data_list.append(p_data)
+                if prot_edge_list is not None and ligand_edge_list is not None:
+                    p_data = PairData(
+                            prot_edge_list, prot_x, prot_coords, prot_coords.size(0), 
+                            ligand_edge_list, ligand_x, ligand_coords, ligand_coords.size(0),  
+                            y = torch.tensor(diss_consts[pname])
+                        )
+                    data_list.append(p_data)
 
 
         if self.pre_filter is not None:
