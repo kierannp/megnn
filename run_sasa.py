@@ -1,81 +1,74 @@
-import rdkit
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import networkx as nx
-import mbuild as mb
-import parmed
 import torch
-import torchmetrics
 from torch import nn, optim
+from torchmetrics import MeanAbsolutePercentageError
 import torch_geometric as tg
 from torch_geometric.loader import DataLoader
-import torch.utils.data
+from typing import List, Optional, Union
+import matplotlib.pyplot as plt
 import shutil
 import sys
 from datetime import datetime
 import argparse
- 
 # My imports
-sys.path.insert(1, '~/projects/megnn')
+sys.path.append('~/projects/megnn')
 from megnn.datasets import *
 from megnn.megnn import *
 from megnn.utils import *
 
-parser = argparse.ArgumentParser(
-                    prog='ProgramName',
-                    description='What the program does',
-                    epilog='Text at the bottom of help')
-
-parser.add_argument('--debug', action='store_true', default=False)
-parser.add_argument('-c', '--clean', default=False)
-
-args = parser.parse_args()
 # clear the processed dataset
 try:
-    if args.clean:
-        print('Removed processed dataset')
-        shutil.rmtree('./processed')
-        shutil.rmtree('./datasets/v2019-other-PL/processed')
+    shutil.rmtree('./processed')
 except:
     pass
 
-n_epochs  = 100
-batch_size = 1
+
+parser = argparse.ArgumentParser(description='SASA IEGNN')
+parser.add_argument('--lr', type=float, default=2e-4)
+parser.add_argument('--epochs', type=int, default=2)
+parser.add_argument('--batch_size', type=int, default=64)
+parser.add_argument('--n_layers', type=int, default=5)
+parser.add_argument('--hidden_dim', type=int, default=64)
+parser.add_argument('--attention', type=bool, default=False)
+parser.add_argument('--n_samples', type=int, default=10000)
+
+args, unparsed_args = parser.parse_known_args()
+
+# hyperparameters
+n_epochs  = args.epochs
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 dtype = torch.float32
-dat = PdbBind_Dataset(root='/raid6/homes/kierannp/projects/megnn/datasets/v2019-other-PL', debug = args.debug )
-print('Loaded the dataset')
+batch_size = args.batch_size
+tg.seed.seed_everything(123456)
 
-a = []
-for d in dat:
-    a.append(d.y)
-kd_mean = torch.mean(torch.tensor(a))
-kd_std = torch.std(torch.tensor(a))
-
-dat.shuffle()
-train_percent = .8
-test_percent = .1
-train_stop = int(len(dat)*train_percent)
-test_stop = train_stop + int(len(dat)*test_percent)
-train_dataset = dat[:train_stop]
-test_dataset = dat[train_stop:]
-train_loader = DataLoader(train_dataset, batch_size=batch_size, follow_batch=['x_s', 'x_t', 'positions_s', 'positions_t'], shuffle=False)
+# dataset
+dat = SASA_Dataset(
+    root='.', 
+    smi_path='/raid6/homes/kierannp/projects/megnn/datasets/gdb11/gdb11_size09.smi',
+    n_samples=args.n_samples
+)
+train_dataset = dat[:int(len(dat)*.8)]
+test_dataset = dat[int(len(dat)*.8):]
+train_loader = DataLoader(train_dataset, batch_size=batch_size, follow_batch=['x_s', 'x_t', 'positions_s', 'positions_t'], shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, follow_batch=['x_s', 'x_t', 'positions_s', 'positions_t'], shuffle=False)
+place_holder = dat[0]
 
-model = MEGNN(n_graphs=2, in_node_nf=dat.data.x_s.size(1), in_edge_nf=0, hidden_nf=64, device=device, n_layers=5, coords_weight=1.0,
-             attention=False, node_attr=1)
+# define the model
+model = MEGNN(
+    n_graphs=2, 
+    in_node_nf=5, 
+    in_edge_nf=0, 
+    hidden_nf=args.hidden_dim, 
+    device=device, 
+    n_layers=args.n_layers, 
+    coords_weight=1.,
+    attention=args.attention, 
+    node_attr=1
+)
+print(model)
 
+# define optimizer and loss function
 optimizer = optim.Adam(model.parameters())
-
-def rmsd_loss(x, y):
-    return torch.sqrt(torch.sum((x - y)**2)/x.shape[0])
-def RMSELoss(yhat,y):
-    return torch.sqrt(torch.mean((yhat-y)**2))
-
-criterion = nn.MSELoss().to(device)
-
-print('Initialized model')
+criterion = nn.MSELoss()
 
 def train(epoch, loader):
     epoch_loss = 0
@@ -91,10 +84,6 @@ def train(epoch, loader):
         atom_positions_s,atom_positions_t,\
         batch_size_s, label = convert_to_dense(data, device, dtype)
 
-        label = (label - kd_mean) / kd_std
-
-        if (torch.abs(one_hot_s[:,:]) > 1000).sum()>0 or (torch.abs(one_hot_t[:,:]) > 1000).sum()>0:
-            continue 
         pred = model(
             h0 = [one_hot_s, one_hot_t], 
             all_edges = [edges_s, edges_t], 
@@ -105,8 +94,6 @@ def train(epoch, loader):
             x = [atom_positions_s, atom_positions_t]
         )
         loss = criterion(pred, label)  # Compute the loss.
-        if not torch.isfinite(torch.tensor(loss.item())):
-            raise Exception('Loss exploded')
         epoch_loss += loss.item()
         total_samples += batch_size_s
         loss.backward()  # Derive gradients.
@@ -114,11 +101,11 @@ def train(epoch, loader):
         optimizer.zero_grad()  # Clear gradients.
         if i % 10 == 0:
             print("Epoch %d \t Iteration %d \t loss %.4f" % (epoch, i, loss.item()))
-    return epoch_loss / len(loader)
+    return epoch_loss/total_samples
 
 def test(loader):
     model.eval()
-    predictions, actuals = [], []
+    epoch_loss = 0
     total_samples = 0
     for data in loader:  # Iterate in batches over the training/test dataset.
 
@@ -130,8 +117,6 @@ def test(loader):
         atom_positions_s,atom_positions_t,\
         batch_size_s, label = convert_to_dense(data, device, dtype)
 
-        label = (label - kd_mean) / kd_std
-
         pred = model(
             h0 = [one_hot_s, one_hot_t], 
             all_edges = [edges_s, edges_t], 
@@ -141,14 +126,14 @@ def test(loader):
             n_nodes = [n_nodes_s, n_nodes_t], 
             x = [atom_positions_s, atom_positions_t]
         )
-        total_samples += batch_size
-        predictions.extend(list((kd_std*pred.detach()+kd_mean).cpu().numpy()))
-        actuals.extend(list((kd_std*label.detach()+kd_mean).cpu().numpy()))
-    return criterion(torch.tensor(predictions), torch.tensor(actuals)).item()
+
+        epoch_loss += criterion(pred, label).item()
+        total_samples += batch_size_s
+    return epoch_loss / total_samples
 
 res = {'epochs': [], 'train_loss': [],'test_loss': [], 'best_test': 1e10, 'best_epoch': 0}
 for epoch in range(0, n_epochs):
-    train_loss = train(epoch, train_loader) 
+    train_loss = train(epoch, train_loader)
     res['train_loss'].append(train_loss)
     if epoch % 1 == 0:
         test_loss = test(test_loader)
@@ -163,5 +148,5 @@ for epoch in range(0, n_epochs):
 plt.plot(res['epochs'], res['train_loss'], label='train')
 plt.plot(res['epochs'], res['test_loss'], label='test')
 plt.legend()
-plt.savefig('history.png')
-torch.save(model.state_dict(), './models/MEGNN_pdb_RMS{}.pth'.format(datetime.now()))
+plt.savefig('training.png')
+# torch.save(model.state_dict(), './models/MEGNN_{}.pth'.format(datetime.now()))

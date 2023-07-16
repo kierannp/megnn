@@ -16,6 +16,7 @@ from urllib.parse import quote
 from rdkit.Chem import AllChem
 from rdkit import Chem
 import rdkit
+from rdkit.Chem import AllChem, rdFreeSASA
 import math
 import random
 import sys
@@ -23,18 +24,23 @@ sys.path.insert(1, '~/projects/megnn')
 from megnn.utils import *
 
 class PairData(Data):
-    def __init__(self, edge_index_s=None, x_s=None, positions_s=None, 
-                n_nodes_s=None,edge_index_t=None, x_t=None, positions_t=None,
-                n_nodes_t=None, y=None):
+    def __init__(
+        self, 
+        edge_index_s=None, x_s=None, positions_s=None, n_nodes_s=None, #edge_attr_s=None,
+        edge_index_t=None, x_t=None, positions_t=None, n_nodes_t=None,
+        y=None
+    ):
         super().__init__()
         self.edge_index_s = edge_index_s
         self.x_s = x_s
         self.positions_s = positions_s
+        # self.edge_attr_s = edge_attr_s
         self.n_nodes_s = n_nodes_s
 
         self.edge_index_t = edge_index_t
         self.x_t = x_t
         self.positions_t = positions_t
+        # self.edge_attr_t = edge_attr_t
         self.n_nodes_t = n_nodes_t
 
         self.y = y
@@ -368,9 +374,10 @@ class Cloud_Point_Dataset(InMemoryDataset):
         torch.save((data, slices), self.processed_paths[0])
 
 class PdbBind_Dataset(InMemoryDataset):
-    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, dataframe=None):
+    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None, dataframe=None, debug=False):
         self.dataframe = dataframe
         self.root = root
+        self.debug = debug
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
 
@@ -450,7 +457,8 @@ class PdbBind_Dataset(InMemoryDataset):
                         # Correct the units to standard Molarity units
                         diss_consts[l.split()[0]] = math.log(float(experiment_value[3:-2]) * unit_conversions[experiment_value[-2:]])
 
-        # protein_names = random.sample(protein_names, 50)
+        if self.debug:
+            protein_names = random.sample(protein_names, 50)
         ############### Add all element types #########################
         for pname in protein_names:
             files = glob('{}/{}/*'.format(self.root, pname))
@@ -479,7 +487,18 @@ class PdbBind_Dataset(InMemoryDataset):
         self.elements = all_elements
         vecs = F.one_hot(torch.arange(0, len(self.elements)), num_classes=len(self.elements))
         self.element2vec = {e:v for e, v in zip(self.elements, vecs)}
-        
+
+        with open('{}/../../ffnonbonded.itp'.format(self.root)) as itpfile:
+            itp_lines = itpfile.readlines()
+            itpfile.close()
+        atype_to_lj = {}
+        for i, l in enumerate(itp_lines[2:54]):
+            if i == 0:
+                name, nbr, mass, charge, ptype, sigma, epsilon, _, _, _, _ = l.split()
+            else:
+                name, nbr, mass, charge, ptype, sigma, epsilon = l.split()
+            atype_to_lj[name] = (float(sigma), float(epsilon))
+
         ############### Process graphs #########################
         for pname in protein_names:
             if pname not in delinquints:
@@ -506,23 +525,15 @@ class PdbBind_Dataset(InMemoryDataset):
                         
                         if len(glob('{}/{}/topol_Protein*'.format(self.root, pname))) > 0:
                             continue
+
                         atom_start = next(i + 2 for i, l in enumerate(top_lines) if '[ atoms ]' in l)
                         atom_stop = next(i - 1 for i, l in enumerate(top_lines) if '[ bonds ]' in l)
                         bond_start = next(i + 2 for i, l in enumerate(top_lines) if '[ bonds ]' in l)
                         bond_stop = next(i - 1 for i, l in enumerate(top_lines) if '[ pairs ]' in l)
                         bond_stop = next(i - 1 for i, l in enumerate(top_lines) if '[ pairs ]' in l)
-                        pair_start = next(i + 1 for i, l in enumerate(top_lines) if '[ pairs ]' in l)
-                        pair_stop = next(i - 1 for i, l in enumerate(top_lines) if '[ angles ]' in l)
+                        # pair_start = next(i + 1 for i, l in enumerate(top_lines) if '[ pairs ]' in l)
+                        # pair_stop = next(i - 1 for i, l in enumerate(top_lines) if '[ angles ]' in l)
 
-                        # Make Edgelist for the graph
-                        prot_edge_list = torch.empty((2, bond_stop-bond_start), dtype=torch.int64)
-
-                        for i, l in enumerate(top_lines[bond_start:bond_stop]):
-                            source, dest, _ = l.split()
-                            prot_edge_list[0,i] = int(source)
-                            prot_edge_list[1,i] = int(dest)
-            
-                        
                         # Make the coordinates for the molecule
                         prot_coords = torch.empty((len(gro_lines[2:-1]), 3),dtype=torch.float32)
                         nbr_to_res = {}
@@ -535,8 +546,25 @@ class PdbBind_Dataset(InMemoryDataset):
                             x, y, z = float(x), float(y), float(z)
                             prot_coords[i] = torch.tensor((x, y, z))
 
+                        # Make Edgelist for the graph
+                        prot_edge_list = torch.empty((2, bond_stop-bond_start), dtype=torch.int64)
+                        for i, l in enumerate(top_lines[bond_start:bond_stop]):
+                            source, dest, _ = l.split()
+                            prot_edge_list[0,i] = int(source)
+                            prot_edge_list[1,i] = int(dest)
+            
+                        # Make edge features
+
+                        # prot_edge_features = torch.empty((bond_stop-bond_start, 2), dtype=torch.int64)          # two features, for Leonard Jones parameters
+                        # for i, l in enumerate(top_lines[pair_start:pair_stop]):
+                        #     src, dest, _ = l.split()
+                        #     atype = nbr_to_atype[int(src)]
+                        #     atype_to_lj
+
+
                         # Make the node features
-                        prot_x = torch.empty((len(gro_lines[2:-1]), len(self.elements) + 1), dtype=torch.float32)
+                        prot_x = torch.empty((len(gro_lines[2:-1]), len(self.elements) + 3), dtype=torch.float32)
+
                         i = 0
                         for l in top_lines[atom_start:atom_stop]:
                             if 'residue' in l:
@@ -546,9 +574,11 @@ class PdbBind_Dataset(InMemoryDataset):
                             else:
                                 nbr, atype, res, _, atom, _, charge, mass = l.split()
                             charge, mass = torch.tensor([float(charge)]), float(mass)
+                            sigma, epsilon = atype_to_lj[atype]
+                            lj = torch.tensor([sigma, epsilon])
                             ele = mass_to_element[round(mass)]
 
-                            prot_x[i] = torch.cat((self.element2vec[ele], charge), 0)
+                            prot_x[i] = torch.cat((self.element2vec[ele], charge, lj), 0)
                             i += 1
                     if 'ligand' in f and 'mol2' in f:
                         element_dict, ligand_coords, ligand_edge_list = self.process_mol2(f)
@@ -560,9 +590,9 @@ class PdbBind_Dataset(InMemoryDataset):
                         ligand_coords = ligand_coords.clone()
 
                         # Make the node features
-                        ligand_x = torch.empty((len(element_dict),len(self.elements)+1), dtype=torch.float32)
+                        ligand_x = torch.empty((len(element_dict),len(self.elements)+3), dtype=torch.float32)
                         for i, a in enumerate(element_dict.values()):
-                            ligand_x[i] = torch.cat( (self.element2vec[a[0]], torch.tensor([a[1]])), dim=0)
+                            ligand_x[i] = torch.cat( (self.element2vec[a[0]], torch.tensor([a[1],0,0])), dim=0)
 
                 if prot_edge_list is not None and ligand_edge_list is not None:
                     p_data = PairData(
@@ -571,6 +601,214 @@ class PdbBind_Dataset(InMemoryDataset):
                             y = torch.tensor(diss_consts[pname])
                         )
                     data_list.append(p_data)
+
+
+        if self.pre_filter is not None:
+            data_list = [data for data in data_list if self.pre_filter(data)]
+        if self.pre_transform is not None:
+            data_list = [self.pre_transform(data) for data in data_list]
+        data, slices = self.collate(data_list)
+        torch.save((data, slices), self.processed_paths[0])
+
+class Simple_Dataset(InMemoryDataset):
+    def __init__(self, root, smi_path, n_samples = 1000, transform=None, pre_transform=None, pre_filter=None):
+        self.smi_path = smi_path
+        self.n_samples = n_samples
+        super().__init__(root, transform, pre_transform, pre_filter)
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def raw_file_names(self):
+        return glob('~/projects/terminal_groups_mixed/src/util/molecules/*.pdb')
+
+    @property
+    def processed_file_names(self):
+        return ['data.pt']
+
+    def download(self):
+        pass
+
+    # def generate_interaction(self, mol1, mol2):
+        
+    def process(self):
+        # Read data into huge `Data` list.
+        data_list = []
+
+        self.df = pd.read_csv(self.smi_path, names = ['smiles','index','grp'], delimiter='	')
+        self.df = self.df.dropna()
+        self.df.reset_index()
+
+        names = ''.join(s.upper() for s in self.df['smiles'].values)
+        names += 'H'
+        self.elements = [n for n in set(names) if n.isalpha()]
+        vecs = F.one_hot(torch.arange(0, len(self.elements)), num_classes=len(self.elements))
+        self.element2vec = {e:v for e, v in zip(self.elements, vecs)}
+
+        n_molecules = self.df['smiles'].shape[0]
+        n_samples = self.n_samples
+
+        smiles_A = self.df['smiles'].values[np.random.choice(n_molecules, n_samples)]
+        smiles_B = self.df['smiles'].values[np.random.choice(n_molecules, n_samples)]
+
+        def get_e_h_x(mol):
+            e_index = torch.empty((2,mol.n_bonds), dtype=torch.float)
+            h = torch.empty((mol.n_particles,len(self.elements)), dtype=torch.float)
+            x = torch.empty((mol.n_particles, 3), dtype=torch.float)
+            #make edge index
+            parts = {p:i for i, p in enumerate(mol.particles())}
+            for i, b in enumerate(mol.bonds()):
+                e_index[0,i] = parts[b[0]]
+                e_index[1,i] = parts[b[1]]
+            #make node features
+            for i, p in enumerate(mol):
+                h[i] = self.element2vec[p.element.symbol]        
+            #make positional features
+            x = torch.tensor(mol.xyz)
+            return e_index, h, x
+        
+        for i, (a,b) in enumerate(zip(smiles_A, smiles_B)):
+            if i % 1000 == 0:
+                print('\n{} loaded!\n'.format(i))
+            try:
+                mol_a = mb.load(a, smiles=True)
+                mol_b = mb.load(b, smiles=True)
+                
+                edge_index_1, h_1, x_1 = get_e_h_x(mol_a)
+                edge_index_2, h_2, x_2, = get_e_h_x(mol_b)
+
+            # self.smiles2e_index[mol_name] = e_index
+            
+            # for i, p in enumerate(mol.particles()):
+            #     h[i] = self.element2vec[p.element.symbol]
+            # self.smiles2x[mol_name] = h
+            # x_s = torch.tensor(self.smiles2x[row.terminal_group_1])
+            # other_features = torch.tensor(row[features.columns]).reshape(1,len(features.columns))
+            # other_features = other_features.expand(x_s.size(0), len(features.columns))
+            # x_s = torch.cat((x_s,other_features), 1)
+            # edge_index_s = self.smiles2e_index[row.terminal_group_1]
+            # positions_s = torch.tensor(self.smiles2xyz[row.terminal_group_1])
+            # n_nodes_s = self.smiles2n_nodes[row.terminal_group_1]
+            # x_t = torch.tensor(self.smiles2x[row.terminal_group_2])
+            # other_features = torch.tensor(row[features.columns]).reshape(1,len(features.columns))
+            # other_features = other_features.expand(x_t.size(0), len(features.columns))
+            # x_t = torch.cat((x_t, other_features), 1)
+            # edge_index_t = self.smiles2e_index[row.terminal_group_2]
+            # positions_t = torch.tensor(self.smiles2xyz[row.terminal_group_2])
+            # n_nodes_t = self.smiles2n_nodes[row.terminal_group_2]
+            # # print('x_s:{}, x_t:{}, e_s:{}, e_t:{}, p_s:{}, p_t:{}'.format(x_s.size(),x_t.size(),edge_index_s.size(), edge_index_t.size(),positions_s.size(),positions_t.size()))
+            except:
+                print('unable to load \n{} \n{}\n'.format(a,b))
+                continue
+            p_data = PairData(
+                edge_index_s=edge_index_1, x_s=h_1, positions_s=x_1, n_nodes_s=mol_a.n_particles, #edge_attr_s=None,
+                edge_index_t=edge_index_2, x_t=h_2, positions_t=x_2, n_nodes_t=mol_b.n_particles,
+                y = torch.tensor(mol_a.n_particles + mol_b.n_particles)
+            )
+            data_list.append(p_data)
+
+
+        if self.pre_filter is not None:
+            data_list = [data for data in data_list if self.pre_filter(data)]
+        if self.pre_transform is not None:
+            data_list = [self.pre_transform(data) for data in data_list]
+        data, slices = self.collate(data_list)
+        torch.save((data, slices), self.processed_paths[0])
+
+class SASA_Dataset(InMemoryDataset):
+    def __init__(self, root, smi_path, n_samples = 1000, transform=None, pre_transform=None, pre_filter=None):
+        self.smi_path = smi_path
+        self.n_samples = n_samples
+        super().__init__(root, transform, pre_transform, pre_filter)
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def raw_file_names(self):
+        return glob('~/projects/terminal_groups_mixed/src/util/molecules/*.pdb')
+
+    @property
+    def processed_file_names(self):
+        return ['data.pt']
+
+    def download(self):
+        pass
+    
+    def process(self):
+        # Read data into huge `Data` list.
+        data_list = []
+
+        def get_e_h_x(mol):
+            e_index = torch.empty((2,mol.n_bonds), dtype=torch.float)
+            h = torch.empty((mol.n_particles,len(self.elements)), dtype=torch.float)
+            x = torch.empty((mol.n_particles, 3), dtype=torch.float)
+            #make edge index
+            parts = {p:i for i, p in enumerate(mol.particles())}
+            for i, b in enumerate(mol.bonds()):
+                e_index[0,i] = parts[b[0]]
+                e_index[1,i] = parts[b[1]]
+            #make node features
+            for i, p in enumerate(mol):
+                h[i] = self.element2vec[p.element.symbol]        
+            #make positional features
+            x = torch.tensor(mol.xyz)
+            return e_index, h, x
+
+        def calculate_sasa(smiles1, smiles2):
+            """
+            Compute Solvent Accessible Surface Area.
+            """
+            mol1 = Chem.MolFromSmiles(smiles1)
+            mol2 = Chem.MolFromSmiles(smiles2)
+            mol1 = Chem.AddHs(mol1)
+            mol2 = Chem.AddHs(mol2)
+            AllChem.EmbedMolecule(mol1)
+            AllChem.EmbedMolecule(mol2)
+
+            # Get Van der Waals radii (angstrom)
+            ptable = Chem.GetPeriodicTable()
+            radii1 = [ptable.GetRvdw(atom.GetAtomicNum()) for atom in mol1.GetAtoms()]
+            radii2 = [ptable.GetRvdw(atom.GetAtomicNum()) for atom in mol2.GetAtoms()]
+
+            # Compute solvent accessible surface area
+            sa = rdFreeSASA.CalcSASA(mol1, radii2, confIdx=-1)
+            
+            return sa
+        
+        self.df = pd.read_csv(self.smi_path, names = ['smiles','index','grp'], delimiter='	')
+        self.df = self.df.dropna()
+        self.df.reset_index()
+
+        names = ''.join(s.upper() for s in self.df['smiles'].values)
+        names += 'H'
+        self.elements = [n for n in set(names) if n.isalpha()]
+        vecs = F.one_hot(torch.arange(0, len(self.elements)), num_classes=len(self.elements))
+        self.element2vec = {e:v for e, v in zip(self.elements, vecs)}
+
+        n_molecules = self.df['smiles'].shape[0]
+        n_samples = self.n_samples
+
+        smiles_A = self.df['smiles'].values[np.random.choice(n_molecules, n_samples)]
+        smiles_B = self.df['smiles'].values[np.random.choice(n_molecules, n_samples)]
+        
+        for i, (a,b) in enumerate(zip(smiles_A, smiles_B)):
+            if i % 1000 == 0:
+                print('\n{} attempted loads\n'.format(i))
+            try:
+                mol_a = mb.load(a, smiles=True)
+                mol_b = mb.load(b, smiles=True)
+                edge_index_1, h_1, x_1 = get_e_h_x(mol_a)
+                edge_index_2, h_2, x_2, = get_e_h_x(mol_b)
+                sasa = calculate_sasa(a, b)
+                if sasa == float("nan") or sasa == float('inf') or sasa > 10000:
+                    continue
+            except:
+                print('unable to load \n{} \n{}\n'.format(a,b))
+                continue
+            p_data = PairData(
+                edge_index_s=edge_index_1, x_s=h_1, positions_s=x_1, n_nodes_s=mol_a.n_particles, #edge_attr_s=None,
+                edge_index_t=edge_index_2, x_t=h_2, positions_t=x_2, n_nodes_t=mol_b.n_particles,
+                y = torch.tensor(sasa)
+            )
+            data_list.append(p_data)
 
 
         if self.pre_filter is not None:
