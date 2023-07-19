@@ -160,10 +160,11 @@ class I_GCL(GCL_basic):
             out = out * att
         return out
     
-    def node_model(self, h, edge_index, int_index, edge_attr, int_attr):
+    def node_model(self, h, edge_index, int_index, edge_attr):
         row, col = edge_index
+        int_row, int_col = int_index
         edge_agg = unsorted_segment_sum(edge_attr, row, num_segments=h.size(0))
-        int_agg = 
+        int_agg = unsorted_segment_sum(edge_attr, row, num_segments=h.size(0))
         out = torch.cat([h, edge_agg, int_agg], dim=1)
         out = self.node_mlp(out)
         if self.recurrent:
@@ -675,7 +676,17 @@ class IGNN(torch.nn.Module):
         else:
             n_node_attr = 0
         for i in range(0, n_layers):
-            self.add_module("i_gcl_%d" % i, I_GCL(self.hidden_nf, self.hidden_nf, self.hidden_nf, int_edge_nf=in_node_nf,edges_in_d=in_edge_nf, nodes_attr_dim=n_node_attr, act_fn=act_fn, recurrent=True, attention=attention))
+            self.add_module("i_gcl_%d" % i, I_GCL(
+                self.hidden_nf, 
+                self.hidden_nf, 
+                self.hidden_nf, 
+                int_node_nf=in_node_nf,
+                edges_in_nf=in_edge_nf, 
+                # int_edge_nf=0, 
+                act_fn=act_fn, 
+                recurrent=True, 
+                attention=attention)
+            )
 
         self.node_dec = nn.Sequential(nn.Linear(self.hidden_nf, self.hidden_nf),
                                       act_fn,
@@ -685,7 +696,12 @@ class IGNN(torch.nn.Module):
     def forward(self, h, edges, edge_attr, int_h):
         h = self.embedding(h)
         for i in range(0, self.n_layers):
-            h = self._modules["i_gcl_{}_{}".format(i)](h, edges, edge_attr, int_h)
+            h = self._modules["i_gcl_{}".format(i)](
+                x=h, 
+                edge_index=edges, 
+                int_x=int_h, 
+                edge_attr = None
+            )
         h = self._modules["node_dec"](h)
         h = h.unsqueeze(0)
         pred = torch.sum(h, dim=1)

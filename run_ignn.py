@@ -6,10 +6,10 @@ from torchmetrics import MeanAbsolutePercentageError
 from typing import List, Optional, Union
 import shutil
 from datetime import datetime
+import argparse
 import sys
-# from easydict import EasyDict as edict
 # My imports
-sys.path.append('~/projects/multi-egnn')
+sys.path.append('~/projects/megnn')
 from megnn.datasets import *
 from megnn.megnn import *
 from megnn.utils import *
@@ -20,6 +20,17 @@ from megnn.utils import *
 # except:
 #     pass
 
+parser = argparse.ArgumentParser(description='IGNN')
+parser.add_argument('--lr', type=float, default=2e-4)
+parser.add_argument('--epochs', type=int, default=2)
+parser.add_argument('--batch_size', type=int, default=64)
+parser.add_argument('--n_layers', type=int, default=5)
+parser.add_argument('--hidden_dim', type=int, default=64)
+parser.add_argument('--attention', type=bool, default=False)
+parser.add_argument('--n_samples', type=int, default=10000)
+
+args, unparsed_args = parser.parse_known_args()
+
 # hyperparameters
 n_epochs  = 100
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -29,7 +40,12 @@ batch_size = 1
 tg.seed.seed_everything(123456)
 
 # dataset
-dat = COF_Dataset(root='.')
+# dataset
+dat = SASA_Dataset(
+    root='.', 
+    smi_path='/raid6/homes/kierannp/projects/megnn/datasets/gdb11/gdb11_size09.smi',
+    n_samples=args.n_samples
+)
 train_dataset = dat[:int(len(dat)*.8)]
 test_dataset = dat[int(len(dat)*.8):]
 train_loader = DataLoader(train_dataset, batch_size=batch_size, follow_batch=['x_s', 'x_t', 'positions_s', 'positions_t'], shuffle=True)
@@ -37,7 +53,16 @@ test_loader = DataLoader(test_dataset, batch_size=batch_size, follow_batch=['x_s
 # prop_mean, prop_mad = compute_cof_mean_mad(dat.dataframe)
 
 # define the model
-model = MGNN(n_graphs=2, in_node_nf=110, in_edge_nf=0, hidden_nf=128, device=device, n_layers=8)
+model = IGNN(
+    in_node_nf=dat[0].x_s.shape[1], 
+    in_edge_nf=0, 
+    device=device, 
+    hidden_nf=128, 
+    n_layers=8,  
+    node_attr=1, 
+    act_fn=nn.ReLU(), 
+    attention=False
+)
 print(model)
 
 # define optimizer and loss function
@@ -50,13 +75,26 @@ def train(epoch, loader):
     model.train()
     for i, data in enumerate(loader):
         data.to(device)
+        one_hot_s, one_hot_t,\
+        edges_s, edges_t,\
+        atom_mask_s, atom_mask_t, \
+        edge_mask_s, edge_mask_t, \
+        n_nodes_s, n_nodes_t, \
+        atom_positions_s,atom_positions_t,\
+        batch_size_s, label = convert_to_dense(data, device, dtype)
+
+        # label = (label - kd_mean) / kd_std
         pred = model(
-            h0 = [data.x_s, data.x_t], 
-            all_edges = [data.edge_index_s, data.edge_index_t], 
-            all_edge_attr = [None, None], 
-            n_nodes = [data.n_nodes_s, data.n_nodes_t], 
-            x = [data.positions_s, data.positions_t]
+            one_hot_s, 
+            edges_s, 
+            None, 
+            one_hot_t
         )
+            # data.x_s, data.x_t
+            # all_edges = [data.edge_index_s, data.edge_index_t], 
+            # all_edge_attr = [None, None], 
+            # n_nodes = [data.n_nodes_s, data.n_nodes_t], 
+            # x = [data.positions_s, data.positions_t]
         loss = criterion(pred, data.y)  # Compute the loss.
         epoch_loss += loss.item()
         total_samples += len(data.batch)
