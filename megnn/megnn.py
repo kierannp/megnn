@@ -131,13 +131,13 @@ class I_GCL(GCL_basic):
                 nn.Sigmoid())
 
         self.interaction_mlp = nn.Sequential(
-            nn.Linear(int_node_nf, hidden_nf, bias=bias),
+            nn.Linear(input_edge_nf, hidden_nf, bias=bias),
             act_fn,
             nn.Linear(hidden_nf, hidden_nf, bias=bias),
             act_fn)
 
         self.node_mlp = nn.Sequential(
-            nn.Linear(hidden_nf + input_nf, hidden_nf, bias=bias),
+            nn.Linear(hidden_nf*3, hidden_nf, bias=bias),
             act_fn,
             nn.Linear(hidden_nf, output_nf, bias=bias))
         
@@ -160,22 +160,23 @@ class I_GCL(GCL_basic):
             out = out * att
         return out
     
-    def node_model(self, h, edge_index, int_index, edge_attr):
+    def node_model(self, h, edge_index, edge_attr, int_index, int_attr):
         row, col = edge_index
         int_row, int_col = int_index
         edge_agg = unsorted_segment_sum(edge_attr, row, num_segments=h.size(0))
-        int_agg = unsorted_segment_sum(edge_attr, row, num_segments=h.size(0))
+        int_agg = unsorted_segment_sum(int_attr, int_row, num_segments=h.size(0))
         out = torch.cat([h, edge_agg, int_agg], dim=1)
         out = self.node_mlp(out)
         if self.recurrent:
             out = out + h
         return out
     
-    def forward(self, x, edge_index, int_x, edge_attr = None):
+    def forward(self, x, edge_index, int_x, int_index, edge_attr = None):
         row, col = edge_index
+        int_row, int_col = int_index
         edge_feat = self.edge_model(x[row], x[col], edge_attr)
-        int_feat = self.interaction_model(x, int_x)
-        x = self.node_model(x, edge_index, edge_feat, int_feat)
+        int_feat = self.interaction_model(x[int_row], int_x[int_col])
+        x = self.node_model(x, edge_index, edge_feat, int_index, int_feat)
         return x, edge_feat
     
 class GCL_rf(GCL_basic):
@@ -684,25 +685,41 @@ class IGNN(torch.nn.Module):
                 edges_in_nf=in_edge_nf, 
                 # int_edge_nf=0, 
                 act_fn=act_fn, 
-                recurrent=True, 
+                recurrent=False, 
                 attention=attention)
             )
 
-        self.node_dec = nn.Sequential(nn.Linear(self.hidden_nf, self.hidden_nf),
-                                      act_fn,
-                                      nn.Linear(self.hidden_nf, self.hidden_nf))
+        self.node_dec = nn.Sequential(
+            nn.Linear(self.hidden_nf, self.hidden_nf*2),
+            act_fn,
+            nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
+            act_fn,
+            nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
+            act_fn,
+            nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
+            act_fn,
+            nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
+            act_fn,
+            nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
+            act_fn,
+            nn.Linear(self.hidden_nf*2, 1)
+        )
         self.to(self.device)
 
-    def forward(self, h, edges, edge_attr, int_h):
+    def forward(self, h, edges, edge_attr, n_nodes_h, node_mask, int_h, int_edges):
         h = self.embedding(h)
+        int_h = self.embedding(int_h)
         for i in range(0, self.n_layers):
-            h = self._modules["i_gcl_{}".format(i)](
+            h, _ = self._modules["i_gcl_{}".format(i)](
                 x=h, 
                 edge_index=edges, 
-                int_x=int_h, 
+                int_x=int_h,
+                int_index=int_edges,
                 edge_attr = None
             )
-        h = self._modules["node_dec"](h)
-        h = h.unsqueeze(0)
+        h = h * node_mask
+        h = h.view(-1, n_nodes_h, self.hidden_nf)
+        # h = h.unsqueeze(0)
         pred = torch.sum(h, dim=1)
+        pred = self._modules["node_dec"](pred)
         return pred.squeeze(1)
