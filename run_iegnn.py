@@ -11,7 +11,7 @@ import sys
 # My imports
 sys.path.append('~/projects/megnn')
 from megnn.datasets import *
-from megnn.megnn import *
+from megnn.models import *
 from megnn.utils import *
 
 # clear the processed dataset
@@ -72,6 +72,7 @@ def train(model, epoch, loader, device, dtype, criterion, optimizer):
             int_h=one_hot_t, 
             int_edges=int_edges
         )
+        label = torch.exp(data.y)
             # data.x_s, data.x_t
             # all_edges = [data.edge_index_s, data.edge_index_t], 
             # all_edge_attr = [None, None], 
@@ -79,7 +80,7 @@ def train(model, epoch, loader, device, dtype, criterion, optimizer):
             # x = [data.positions_s, data.positions_t]
         if torch.isnan(data.y).any():
             continue
-        loss = criterion(pred, data.y)  # Compute the loss.
+        loss = criterion(pred, label)  # Compute the loss.
         if loss.item() != loss.item():
             print("Something exploded!")
         epoch_loss += loss.item()
@@ -186,7 +187,6 @@ def main():
 
     torch.save(model.state_dict(), './models/GNN_{}.pth'.format(datetime.now()))
 
-    print("MAPE:{}")
 
 if __name__ == "__main__":
     main()
