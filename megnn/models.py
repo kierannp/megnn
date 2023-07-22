@@ -196,16 +196,6 @@ class IEGNN(torch.nn.Module):
 
         self.node_dec = nn.Sequential(
             nn.Linear(self.hidden_nf, self.hidden_nf*2),
-            # act_fn,
-            # nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
-            # act_fn,
-            # nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
-            # act_fn,
-            # nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
-            # act_fn,
-            # nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
-            # act_fn,
-            # nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
             act_fn,
             nn.Linear(self.hidden_nf*2, 1)
         )
@@ -261,16 +251,6 @@ class IGNN(torch.nn.Module):
 
         self.node_dec = nn.Sequential(
             nn.Linear(self.hidden_nf, self.hidden_nf*2),
-            act_fn,
-            nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
-            act_fn,
-            nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
-            act_fn,
-            nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
-            act_fn,
-            nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
-            act_fn,
-            nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
             act_fn,
             nn.Linear(self.hidden_nf*2, 1)
         )

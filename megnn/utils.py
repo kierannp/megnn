@@ -171,3 +171,16 @@ def atomtype(filename, root, pname):
         result = False
     subprocess.run('cd -', shell=True)
     return result
+
+def create_interactional_edges(n_nodes_s, n_nodes_t, device):
+    row, col = torch.empty(n_nodes_s*n_nodes_t), torch.empty(n_nodes_s*n_nodes_t)
+    s_index = 0
+    for i in range(row.shape[0]):
+        if i % n_nodes_t == 0 and i != 0:
+            s_index += 1
+        row[i] = s_index
+    for i in range(col.shape[0]):
+        s_index = i % n_nodes_t
+        col[i] = s_index
+    
+    return [row.to(device, torch.long), col.to(device, torch.long)]

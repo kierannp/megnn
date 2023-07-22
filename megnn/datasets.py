@@ -207,7 +207,7 @@ class COF_Dataset(InMemoryDataset):
             edge_index_t = self.smiles2e_index[row.terminal_group_2]
             positions_t = torch.tensor(self.smiles2xyz[row.terminal_group_2])
             n_nodes_t = self.smiles2n_nodes[row.terminal_group_2]
-            print('x_s:{}, x_t:{}, e_s:{}, e_t:{}, p_s:{}, p_t:{}'.format(x_s.size(),x_t.size(),edge_index_s.size(), edge_index_t.size(),positions_s.size(),positions_t.size()))
+            # print('x_s:{}, x_t:{}, e_s:{}, e_t:{}, p_s:{}, p_t:{}'.format(x_s.size(),x_t.size(),edge_index_s.size(), edge_index_t.size(),positions_s.size(),positions_t.size()))
 
             p_data = PairData(edge_index_s, x_s, positions_s, n_nodes_s, edge_index_t, x_t, positions_t, n_nodes_t,  y = torch.tensor(row.COF))
             data_list.append(p_data)
@@ -397,7 +397,6 @@ class PdbBind_Dataset(InMemoryDataset):
         AllChem.EmbedMolecule(molecule)
         AllChem.UFFOptimizeMolecule(molecule)
         molecule.GetConformer()
-        print()
         coords = []
         for i, atom in enumerate(molecule.GetAtoms()):
             positions = molecule.GetConformer().GetAtomPosition(i)
