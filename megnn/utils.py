@@ -59,12 +59,12 @@ def convert_to_dense(data, device, dtype, graphs = 2):
             atom_positions_s = dense_positions_s.view(batch_size_s * n_nodes_s, -1).to(device, dtype)
             atom_positions_t = dense_positions_t.view(batch_size_t * n_nodes_t, -1).to(device, dtype)
 
-            edge_mask_s = atom_mask_s.unsqueeze(1) * atom_mask_s.unsqueeze(2)
+            edge_mask_s = (atom_mask_s.unsqueeze(1) * atom_mask_s.unsqueeze(2)).to(device)
             #mask diagonal
             diag_mask = ~torch.eye(edge_mask_s.size(1), dtype=torch.bool).unsqueeze(0).to(device)
             edge_mask_s *= diag_mask
             edge_mask_s = edge_mask_s.view(batch_size_s * n_nodes_s * n_nodes_s, 1).to(device)
-            edge_mask_t = atom_mask_t.unsqueeze(1) * atom_mask_t.unsqueeze(2)
+            edge_mask_t = (atom_mask_t.unsqueeze(1) * atom_mask_t.unsqueeze(2)).to(device)
             #mask diagonal
             diag_mask = ~torch.eye(edge_mask_t.size(1), dtype=torch.bool).unsqueeze(0).to(device)
             edge_mask_t *= diag_mask

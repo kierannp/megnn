@@ -120,7 +120,7 @@ class COF_Dataset(InMemoryDataset):
         molecules = glob(home + '/projects/terminal_groups_mixed/src/util/molecules/*')
         self.mean = self.dataframe['COF'].mean()
         self.std = self.dataframe['COF'].std()
-        self.dataframe['COF'] = (self.dataframe['COF']-self.mean)/self.std
+        # self.dataframe['COF'] = (self.dataframe['COF']-self.mean)/self.std
         self.molecules = list(set(molecules))
         self.names2graph = {}
         self.mol_smiles = {}

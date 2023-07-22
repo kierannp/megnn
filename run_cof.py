@@ -84,7 +84,7 @@ def train(epoch, loader):
         optimizer.zero_grad()  # Clear gradients.
         if i % 10 == 0:
             print("Epoch %d \t Iteration %d \t loss %.4f" % (epoch, i, loss.item()))
-    return epoch_loss/total_samples
+    return epoch_loss/len(loader)
 
 def test(loader):
     model.eval()
@@ -121,7 +121,7 @@ def test(loader):
         # epoch_loss += criterion(pred, (label - prop_mean) / prop_mad).item()*batch_size
         epoch_loss += criterion(pred, label).item()
         total_samples += batch_size_s
-    return epoch_loss / total_samples
+    return epoch_loss / len(loader)
 
 
 res = {'epochs': [], 'train_loss': [],'test_loss': [], 'best_test': 1e10, 'best_epoch': 0}

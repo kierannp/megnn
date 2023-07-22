@@ -329,7 +329,6 @@ class E_GCL(nn.Module):
         # x = self.node_model(x, edge_index, x[col], u, batch)  # GCN
         return h, coord, edge_attr
 
-# TODO implement I_E_GCL
 class I_E_GCL(nn.Module):
     """Graph Neural Net with global state and fixed number of nodes per graph.
     Args:
@@ -339,7 +338,21 @@ class I_E_GCL(nn.Module):
           temp: Softmax temperature.
     """
 
-    def __init__(self, input_nf, output_nf, hidden_nf, edges_in_d=0, nodes_att_dim=0, act_fn=nn.ReLU(), recurrent=True, coords_weight=1.0, attention=False, clamp=False, norm_diff=False, tanh=False):
+    def __init__(
+            self, 
+            input_nf, 
+            output_nf, 
+            hidden_nf, 
+            edges_in_d=0, 
+            nodes_att_dim=0, 
+            act_fn=nn.ReLU(), 
+            recurrent=True, 
+            coords_weight=1.0, 
+            attention=False, 
+            clamp=False, 
+            norm_diff=False, 
+            tanh=False
+    ):
         super(I_E_GCL, self).__init__()
         input_edge = input_nf * 2
         self.coords_weight = coords_weight
@@ -357,9 +370,18 @@ class I_E_GCL(nn.Module):
             act_fn,
             nn.Linear(hidden_nf, hidden_nf),
             act_fn)
+        
+        # not implementing interactional edge features yet
+        self.interaction_mlp = nn.Sequential(
+            nn.Linear(input_edge, hidden_nf),
+            act_fn,
+            nn.Linear(hidden_nf, hidden_nf),
+            act_fn,
+            nn.Linear(hidden_nf, hidden_nf),
+            act_fn)
 
         self.node_mlp = nn.Sequential(
-            nn.Linear(hidden_nf + input_nf + nodes_att_dim, hidden_nf),
+            nn.Linear(hidden_nf + input_nf*2, hidden_nf),
             act_fn,
             nn.Linear(hidden_nf, hidden_nf),
             act_fn,
@@ -379,7 +401,6 @@ class I_E_GCL(nn.Module):
             coord_mlp.append(nn.Tanh())
             self.coords_range = nn.Parameter(torch.ones(1))*3
         self.coord_mlp = nn.Sequential(*coord_mlp)
-
 
         if self.attention:
             self.att_mlp = nn.Sequential(
@@ -401,13 +422,23 @@ class I_E_GCL(nn.Module):
             out = out * att_val
         return out
 
-    def node_model(self, x, edge_index, edge_attr, node_attr):
+    def interaction_model(self, source, target):
+        edge_in = torch.cat([source, target], dim=1)
+        out = self.interaction_mlp(edge_in)
+        if self.attention:
+            att = self.att_mlp(torch.abs(source - target))
+            out = out * att
+        return out
+
+    def node_model(self, x, edge_index, edge_attr, node_attr, int_index, int_attr):
         row, col = edge_index
-        agg = unsorted_segment_sum(edge_attr, row, num_segments=x.size(0))
+        int_row, int_col = int_index
+        edge_agg = unsorted_segment_sum(edge_attr, row, num_segments=x.size(0))
+        int_agg = unsorted_segment_sum(int_attr, int_row, num_segments=x.size(0))
         if node_attr is not None:
-            agg = torch.cat([x, agg, node_attr], dim=1)
+            agg = torch.cat([x, edge_agg, int_agg, node_attr], dim=1)
         else:
-            agg = torch.cat([x, agg], dim=1)
+            agg = torch.cat([x, edge_agg, int_agg], dim=1)
         out = self.node_mlp(agg)
         if self.recurrent:
             out = x + out
@@ -432,13 +463,15 @@ class I_E_GCL(nn.Module):
 
         return radial, coord_diff
 
-    def forward(self, h, edge_index, coord, edge_attr=None, node_attr=None):
+    def forward(self, h, edge_index, coord, int_h, int_index, edge_attr=None, node_attr=None):
         row, col = edge_index
+        int_row, int_col = int_index
         radial, coord_diff = self.coord2radial(edge_index, coord)
 
         edge_feat = self.edge_model(h[row], h[col], radial, edge_attr)
+        int_feat = self.interaction_model(h[int_row], int_h[int_col])
         coord = self.coord_model(coord, edge_index, coord_diff, edge_feat)
-        h, agg = self.node_model(h, edge_index, edge_feat, node_attr)
+        h, agg = self.node_model(h, edge_index, edge_feat, node_attr, int_index=int_index, int_attr=int_feat)
         # coord = self.node_coord_model(h, coord)
         # x = self.node_model(x, edge_index, x[col], u, batch)  # GCN
         return h, coord, edge_attr
@@ -660,6 +693,74 @@ class MGNN(torch.nn.Module):
             hf.append(h)
         combined = torch.cat(hf, dim=1)
         pred = self.grand_dec(combined)
+        return pred.squeeze(1)
+
+class IEGNN(torch.nn.Module):
+    def __init__(self, in_node_nf, in_edge_nf, device, hidden_nf=128, n_layers=8,  node_attr=1, act_fn=nn.ReLU(), attention=False):
+        super(IEGNN, self).__init__()
+        self.hidden_nf = hidden_nf
+        self.device = device
+        self.n_layers = n_layers
+
+        ### Encoder
+        self.embedding = nn.Linear(in_node_nf, hidden_nf)
+        self.node_attr = node_attr
+        if node_attr:
+            n_node_attr = in_node_nf
+        else:
+            n_node_attr = 0
+        for i in range(0, n_layers):
+            self.add_module("i_e_gcl_%d" % i, I_E_GCL(
+                input_nf=self.hidden_nf, 
+                output_nf=self.hidden_nf, 
+                hidden_nf=self.hidden_nf, 
+                nodes_att_dim=n_node_attr,
+                edges_in_d=in_edge_nf, 
+                act_fn=act_fn, 
+                recurrent=False, 
+                attention=attention,
+                clamp=False,
+                tanh=False
+                )
+            )
+
+
+        self.node_dec = nn.Sequential(
+            nn.Linear(self.hidden_nf, self.hidden_nf*2),
+            act_fn,
+            nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
+            act_fn,
+            nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
+            act_fn,
+            nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
+            act_fn,
+            nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
+            act_fn,
+            nn.Linear(self.hidden_nf*2, self.hidden_nf*2),
+            act_fn,
+            nn.Linear(self.hidden_nf*2, 1)
+        )
+        self.to(self.device)
+
+    def forward(self, h, edges, edge_attr, node_attr, coord, n_nodes_h, node_mask, int_h, int_edges):
+        h = self.embedding(h)
+        int_h = self.embedding(int_h)
+        for i in range(0, self.n_layers):
+            h, _, _ = self._modules["i_e_gcl_{}".format(i)](
+                h, 
+                edge_index=edges,
+                coord=coord, 
+                int_h=int_h, 
+                int_index=int_edges, 
+                edge_attr=edge_attr, 
+                node_attr=node_attr
+            )
+            
+        h = h * node_mask
+        h = h.view(-1, n_nodes_h, self.hidden_nf)
+        # h = h.unsqueeze(0)
+        pred = torch.sum(h, dim=1)
+        pred = self._modules["node_dec"](pred)
         return pred.squeeze(1)
 
 class IGNN(torch.nn.Module):
