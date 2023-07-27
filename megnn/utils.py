@@ -52,8 +52,8 @@ def compute_cof_mean_mad(dataframe):
 
 def convert_to_dense(data, device, dtype, graphs = 2):
         if graphs == 2:
-            dense_positions_s, atom_mask_s = tg.utils.to_dense_batch(data.positions_s, data.positions_s_batch)
-            dense_positions_t, atom_mask_t = tg.utils.to_dense_batch(data.positions_t, data.positions_t_batch)
+            dense_positions_s, atom_mask_s = tg.utils.to_dense_batch(data.x_0, data.x_0_batch)
+            dense_positions_t, atom_mask_t = tg.utils.to_dense_batch(data.x_1, data.x_1_batch)
             batch_size_s, n_nodes_s, _ = dense_positions_s.size()
             batch_size_t, n_nodes_t, _ = dense_positions_t.size()
             atom_positions_s = dense_positions_s.view(batch_size_s * n_nodes_s, -1).to(device, dtype)
@@ -73,8 +73,8 @@ def convert_to_dense(data, device, dtype, graphs = 2):
             atom_mask_s = atom_mask_s.view(batch_size_s * n_nodes_s, -1).to(device)
             atom_mask_t = atom_mask_t.view(batch_size_t * n_nodes_t, -1).to(device)
 
-            one_hot_s, one_hot_s_mask = tg.utils.to_dense_batch(data.x_s, data.x_s_batch)
-            one_hot_t, one_hot_s_mask = tg.utils.to_dense_batch(data.x_t, data.x_t_batch)
+            one_hot_s, one_hot_s_mask = tg.utils.to_dense_batch(data.h_0, data.h_0_batch)
+            one_hot_t, one_hot_s_mask = tg.utils.to_dense_batch(data.h_1, data.h_1_batch)
             one_hot_s = one_hot_s.view(batch_size_s * n_nodes_s, -1).to(device)
             one_hot_t = one_hot_t.view(batch_size_t * n_nodes_t, -1).to(device)
 

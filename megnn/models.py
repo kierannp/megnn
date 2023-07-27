@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from torch_geometric.nn import GCNConv, global_mean_pool
+from torch_geometric.nn import GCNConv, global_mean_pool, global_add_pool
 import sys
 from .layers import *
 
@@ -142,7 +142,7 @@ class MGNN(torch.nn.Module):
         self.to(self.device)
 
 
-    def forward(self, h0, x, all_edges, all_edge_attr, n_nodes):
+    def forward(self, h0, x, all_edges, all_edge_attr, n_nodes, batches):
         hf = []
         for j in range(self.n_graphs):
             h = self.embedding(h0[j])
@@ -150,6 +150,7 @@ class MGNN(torch.nn.Module):
             node_attr = h0[j]
             x_curr = x[j]
             n_node = n_nodes[j]
+            batch = batches[j]
             if all_edge_attr is not None:
                 edge_attr = all_edge_attr[j]
             else:
@@ -157,15 +158,17 @@ class MGNN(torch.nn.Module):
             for i in range(0, self.n_layers):
                 h = self._modules["gcl_{}_{}".format(j,i)](h, edges)
             h = self._modules["node_dec_{}".format(j)](h)
-            h = h.unsqueeze(0)
-            h = torch.sum(h, dim=1)
+            h = global_add_pool(h, batch)
+            # h = unsorted_segment_sum(h, edges[0], num_segments=h.size(0))
+            # h = h.view(-1, n_node, self.hidden_nf)
+            # h = torch.sum(h, dim=1)
             hf.append(h)
         combined = torch.cat(hf, dim=1)
         pred = self.grand_dec(combined)
         return pred.squeeze(1)
 
 class IEGNN(torch.nn.Module):
-    def __init__(self, in_node_nf, in_edge_nf, device, hidden_nf=128, n_layers=8,  node_attr=1, act_fn=nn.ReLU(), attention=False):
+    def __init__(self, in_node_nf, in_edge_nf, device, hidden_nf=128, n_layers=8,  n_node_layers=3, n_int_layers = 5, node_attr=1, act_fn=nn.ReLU(), attention=False):
         super(IEGNN, self).__init__()
         self.hidden_nf = hidden_nf
         self.device = device
@@ -189,19 +192,20 @@ class IEGNN(torch.nn.Module):
                 recurrent=False, 
                 attention=attention,
                 clamp=False,
-                tanh=False
+                tanh=False,
+                n_int_layers=n_int_layers
                 )
             )
 
-
-        self.node_dec = nn.Sequential(
-            nn.Linear(self.hidden_nf, self.hidden_nf*2),
-            act_fn,
-            nn.Linear(self.hidden_nf*2, 1)
-        )
+        modules = []
+        for i in range(n_node_layers):
+            modules.append(nn.Linear(self.hidden_nf, self.hidden_nf))
+            modules.append(act_fn)
+        modules.append(nn.Linear(self.hidden_nf, 1))
+        self.node_dec = nn.Sequential(*modules)
         self.to(self.device)
 
-    def forward(self, h, edges, edge_attr, node_attr, coord, n_nodes_h, node_mask, int_h, int_edges):
+    def forward(self, h, edges, edge_attr, node_attr, coord, n_nodes_h, node_mask, edge_mask, int_h, int_edges):
         h = self.embedding(h)
         int_h = self.embedding(int_h)
         for i in range(0, self.n_layers):
@@ -212,7 +216,8 @@ class IEGNN(torch.nn.Module):
                 int_h=int_h, 
                 int_index=int_edges, 
                 edge_attr=edge_attr, 
-                node_attr=node_attr
+                node_attr=node_attr,
+                edge_mask=edge_mask
             )
             
         h = h * node_mask
@@ -223,7 +228,7 @@ class IEGNN(torch.nn.Module):
         return pred.squeeze(1)
 
 class IGNN(torch.nn.Module):
-    def __init__(self, in_node_nf, in_edge_nf, device, hidden_nf=128, n_layers=8,  node_attr=1, act_fn=nn.ReLU(), attention=False):
+    def __init__(self, in_node_nf, in_edge_nf, device, hidden_nf=128, n_layers=8,  n_node_layers=3, node_attr=1, act_fn=nn.ReLU(), attention=False):
         super(IGNN, self).__init__()
         self.hidden_nf = hidden_nf
         self.device = device
@@ -248,12 +253,12 @@ class IGNN(torch.nn.Module):
                 recurrent=False, 
                 attention=attention)
             )
-
-        self.node_dec = nn.Sequential(
-            nn.Linear(self.hidden_nf, self.hidden_nf*2),
-            act_fn,
-            nn.Linear(self.hidden_nf*2, 1)
-        )
+        modules = []
+        for i in range(n_node_layers):
+            modules.append(nn.Linear(self.hidden_nf, self.hidden_nf))
+            modules.append(act_fn)
+        modules.append(nn.Linear(self.hidden_nf, 1))
+        self.node_dec = nn.Sequential(*modules)
         self.to(self.device)
 
     def forward(self, h, edges, edge_attr, n_nodes_h, node_mask, int_h, int_edges):
@@ -273,3 +278,43 @@ class IGNN(torch.nn.Module):
         pred = torch.sum(h, dim=1)
         pred = self._modules["node_dec"](pred)
         return pred.squeeze(1)
+
+class MMLP(torch.nn.Module):
+    def __init__(self, in_nf, device, hidden_nf=128, n_layers=8,   act_fn=nn.ReLU()):
+        super(MMLP, self).__init__()
+        self.hidden_nf = hidden_nf
+        self.device = device
+        self.n_layers = n_layers
+
+        modules = []
+        modules.append(nn.Linear(in_nf, self.hidden_nf))
+        for i in range(self.n_layers):
+            modules.append(nn.Linear(self.hidden_nf, self.hidden_nf))
+            modules.append(act_fn)
+        modules.append(nn.Linear(self.hidden_nf, self.hidden_nf))
+        self.nn1 = nn.Sequential(*modules)
+
+        modules2 = []
+        modules2.append(nn.Linear(in_nf, self.hidden_nf))
+        for i in range(self.n_layers):
+            modules2.append(nn.Linear(self.hidden_nf, self.hidden_nf))
+            modules2.append(act_fn)
+        modules2.append(nn.Linear(self.hidden_nf, self.hidden_nf))
+        self.nn2 = nn.Sequential(*modules2)
+
+        modules3 = []
+        modules3.append(nn.Linear(2*self.hidden_nf, 2*self.hidden_nf))
+        for i in range(self.n_layers):
+            modules3.append(nn.Linear(2*self.hidden_nf, 2*self.hidden_nf))
+            modules3.append(act_fn)
+        modules3.append(nn.Linear(2*self.hidden_nf, 1))
+        self.combo= nn.Sequential(*modules3)
+
+        self.to(self.device)
+
+    def forward(self, v1, v2):
+        out1 = self.nn1(v1)
+        out2 = self.nn2(v2)
+        both_out = torch.cat([out1, out2],dim=1)
+        pred = self.combo(both_out)
+        return pred

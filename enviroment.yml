@@ -1,0 +1,13 @@
+name: iegnn
+channels:
+  - defaults
+dependencies:
+  - python=3.8
+  - torchvision==0.14.1
+  - pytorch-cuda=11.6
+  - pytorch==1.13.1
+  - torchaudio==0.13.1
+  - mbuild
+  - pyg
+  - gmso
+prefix: /raid6/homes/kierannp/.conda/envs/iegnn

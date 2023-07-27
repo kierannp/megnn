@@ -351,7 +351,8 @@ class I_E_GCL(nn.Module):
             attention=False, 
             clamp=False, 
             norm_diff=False, 
-            tanh=False
+            tanh=False,
+            n_int_layers=5
     ):
         super(I_E_GCL, self).__init__()
         input_edge = input_nf * 2
@@ -372,13 +373,13 @@ class I_E_GCL(nn.Module):
             act_fn)
         
         # not implementing interactional edge features yet
-        self.interaction_mlp = nn.Sequential(
-            nn.Linear(input_edge, hidden_nf),
-            act_fn,
-            nn.Linear(hidden_nf, hidden_nf),
-            act_fn,
-            nn.Linear(hidden_nf, hidden_nf),
-            act_fn)
+        modules = []
+        modules.append(nn.Linear(input_edge, hidden_nf))
+        modules.append(act_fn)
+        for i in range(n_int_layers):
+            modules.append(nn.Linear(hidden_nf, hidden_nf))
+            modules.append(act_fn)
+        self.interaction_mlp = nn.Sequential(*modules)
 
         self.node_mlp = nn.Sequential(
             nn.Linear(hidden_nf + input_nf*2, hidden_nf),
@@ -463,12 +464,13 @@ class I_E_GCL(nn.Module):
 
         return radial, coord_diff
 
-    def forward(self, h, edge_index, coord, int_h, int_index, edge_attr=None, node_attr=None):
+    def forward(self, h, edge_index, edge_mask, coord, int_h, int_index, edge_attr=None, node_attr=None):
         row, col = edge_index
         int_row, int_col = int_index
         radial, coord_diff = self.coord2radial(edge_index, coord)
 
         edge_feat = self.edge_model(h[row], h[col], radial, edge_attr)
+        edge_feat = edge_feat * edge_mask
         int_feat = self.interaction_model(h[int_row], int_h[int_col])
         coord = self.coord_model(coord, edge_index, coord_diff, edge_feat)
         h, agg = self.node_model(h, edge_index, edge_feat, node_attr, int_index=int_index, int_attr=int_feat)

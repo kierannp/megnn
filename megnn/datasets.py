@@ -22,6 +22,7 @@ import random
 import sys
 sys.path.insert(1, '~/projects/megnn')
 from megnn.utils import *
+from megnn.previous_descriptors import *
 
 class PairData(Data):
     def __init__(
@@ -115,7 +116,7 @@ class COF_Dataset(InMemoryDataset):
     def process(self):
         data_path = '~/projects/iMoDELS-supplements/data/raw-data/everything.csv'
         self.dataframe = pd.read_csv(data_path, index_col=0)
-        features = self.dataframe.drop(['terminal_group_1','terminal_group_2','terminal_group_3', 'backbone','chainlength', 'frac-1','frac-2','COF','intercept', 'COF-std', 'intercept-std'], axis=1, inplace=False)
+        features = self.dataframe.drop(['terminal_group_1','terminal_group_2','terminal_group_3', 'backbone','chainlength', 'frac-1','frac-2','COF','intercept'], axis=1, inplace=False)
         home = os.path.expanduser('~')
         molecules = glob(home + '/projects/terminal_groups_mixed/src/util/molecules/*')
         self.mean = self.dataframe['COF'].mean()
@@ -135,9 +136,10 @@ class COF_Dataset(InMemoryDataset):
         self.mol_smiles['isopropyl'] = 'CC(C)O'
         self.mol_smiles['perfluoromethyl'] = 'CC(F)(F)F'
         self.mol_smiles['fluorophenyl'] = 'CC1=CC=C(F)C=C1'
-        self.mol_smiles['carboxyl'] = '*C(=O)O'
+        self.mol_smiles['carboxyl'] = 'C(=O)O'
         self.mol_smiles['amino'] = 'CN'
         self.mol_smiles['acetyl'] = 'C[C]=O'
+        self.mol_smiles['nitrophenyl-h'] = 'CC1=CC=C(C=C1)[N+]([O-])=O'
 
         for ids in set(self.dataframe['terminal_group_1']):
             try:
@@ -207,6 +209,162 @@ class COF_Dataset(InMemoryDataset):
             edge_index_t = self.smiles2e_index[row.terminal_group_2]
             positions_t = torch.tensor(self.smiles2xyz[row.terminal_group_2])
             n_nodes_t = self.smiles2n_nodes[row.terminal_group_2]
+            # print('x_s:{}, x_t:{}, e_s:{}, e_t:{}, p_s:{}, p_t:{}'.format(x_s.size(),x_t.size(),edge_index_s.size(), edge_index_t.size(),positions_s.size(),positions_t.size()))
+
+            p_data = PairData(edge_index_s, x_s, positions_s, n_nodes_s, edge_index_t, x_t, positions_t, n_nodes_t,  y = torch.tensor(row.COF))
+            data_list.append(p_data)
+
+        if self.pre_filter is not None:
+            data_list = [data for data in data_list if self.pre_filter(data)]
+        if self.pre_transform is not None:
+            data_list = [self.pre_transform(data) for data in data_list]
+        data, slices = self.collate(data_list)
+        torch.save((data, slices), self.processed_paths[0])
+
+class COF_Dataset2(InMemoryDataset):
+    def __init__(self, root, transform=None, pre_transform=None, pre_filter=None):
+        super().__init__(root, transform, pre_transform, pre_filter)
+        self.data, self.slices = torch.load(self.processed_paths[0])
+
+    @property
+    def raw_file_names(self):
+        return glob('~/projects/terminal_groups_mixed/src/util/molecules/*.pdb')
+
+    @property
+    def processed_file_names(self):
+        return ['data.pt']
+
+    def download(self):
+        pass
+    def replace_name_graph(self, chem_name):
+        return self.names2graph[chem_name]
+
+    def n_nodes_tuple(self, t1, t2):
+        return (self.smiles2n_nodes[t1], self.smiles2n_nodes[t2])
+            
+    def replace_n_nodes_tuple(self, row):
+        return self.n_nodes_tuple(self.mol_smiles[row['terminal_group_1']], self.mol_smiles[row['terminal_group_2']])
+
+    def get_positions(self, t1,t2):
+        return (self.smiles2xyz[t1], self.smiles2xyz[t2])
+
+    def replace_positions(self, row):
+        return self.get_positions(row['terminal_group_1'], row['terminal_group_2'])
+
+    def replace_e_index(self, chem_name):
+        return self.smiles2e_index[chem_name]
+
+    def replace_node_att(self, chem_name):
+        x = torch.empty((len(self.elements),self.smiles2n_nodes[chem_name]), dtype=torch.int32)
+        for i, p in enumerate(self.smiles2mol[chem_name].particles()):
+            x[i] = self.element2vec[p]
+        return x
+
+    def CIRconvert(self, ids):
+        url = 'http://cactus.nci.nih.gov/chemical/structure/' + quote(ids) + '/smiles'
+        ans = urlopen(url).read().decode('utf8')
+        return ans
+
+    def process(self):
+        data_path = '~/projects/iMoDELS-supplements/data/raw-data/everything.csv'
+        descriptor_path = '/raid6/homes/kierannp/projects/iMoDELS-supplements/data/raw-data/descriptors-ind.csv'
+        des_data = pd.read_csv('/raid6/homes/kierannp/projects/iMoDELS-supplements/data/raw-data/descriptors-ind.csv').T
+        self.dataframe = pd.read_csv(data_path, index_col=0)
+        self.dataframe = self.dataframe.dropna()
+        self.dataframe = self.dataframe[(self.dataframe['frac-1']==.5)]
+        self.mean = self.dataframe['COF'].mean()
+        self.std = self.dataframe['COF'].std()
+        self.dataframe['COF'] = (self.dataframe['COF']-self.mean)/self.std
+        self.dataframe.reset_index()
+        self.mol_smiles = {}
+        self.mol_smiles['acetyl'] = 'C(=O)C'
+        self.mol_smiles['amino'] = 'N'
+        self.mol_smiles['carboxyl'] = 'CC(=O)O'
+        self.mol_smiles['cyano'] = 'C#N'
+        self.mol_smiles['cyclopropyl'] = 'C1C[CH]1'
+        self.mol_smiles['difluoromethyl'] = 'FC(F)C'
+        self.mol_smiles['ethylene'] = 'CC'
+        self.mol_smiles['fluorophenyl'] = 'C1=CC=C(F)C=C1'
+        self.mol_smiles['hydroxyl'] = 'CO'
+        self.mol_smiles['isopropyl'] = 'CC(C)O'
+        self.mol_smiles['methoxy'] = 'C[O]'
+        self.mol_smiles['methyl'] = '[CH3]'
+        self.mol_smiles['nitro'] = '[N+](=O)[O-]'
+        self.mol_smiles['nitrophenyl'] = 'C1=CC(=CC=C1[N+](=O)[O-])O'
+        self.mol_smiles['perfluoromethyl'] = 'CC(F)(F)F'
+        self.mol_smiles['phenol'] = 'c1ccc(cc1)O'
+        self.mol_smiles['phenyl'] = 'C1=CC=CC=C1'
+        self.mol_smiles['pyrrole'] = 'C1=CNC=C1'
+        self.mol_smiles['toluene'] = 'CC1=CC=CC=C1'
+
+        # features = self.dataframe.drop(['terminal_group_1','terminal_group_2','terminal_group_3', 'backbone','chainlength', 'frac-1','frac-2','COF','intercept', 'COF-std', 'intercept-std'], axis=1, inplace=False)
+        home = os.path.expanduser('~')
+        self.mean = self.dataframe['COF'].mean()
+        self.std = self.dataframe['COF'].std()
+        self.names2graph = {}
+        self.smiles2n_nodes = {}
+        self.smiles2xyz = {}
+        self.smiles2e_index = {}
+        self.smiles2mol = {}
+        self.smiles2x = {}
+
+        names = ''.join(smiles.upper() for smiles in self.mol_smiles.values())
+        names += 'H'
+        self.elements = [n for n in set(names) if n.isalpha()]
+
+
+        vecs = F.one_hot(torch.arange(0, len(self.elements)), num_classes=len(self.elements))
+        self.element2vec = {e:v for e, v in zip(self.elements, vecs)}
+
+        for s in self.mol_smiles.values():
+            mol = mb.load(s,smiles=True)
+            G = to_networkx(mol.to_gmso())
+            adj = nx.adjacency_matrix(G)
+            self.names2graph[s] = adj
+            self.smiles2n_nodes[s] = len(list(G.nodes))
+            self.smiles2xyz[s] = mol.xyz
+            self.smiles2mol[s] = mol
+            e_index = torch.empty((2,mol.n_bonds), dtype=torch.int64)
+            parts = {p:i for i, p in enumerate(mol.particles())}
+            for i, b in enumerate(mol.bonds()):
+                e_index[0,i] = parts[b[0]]
+                e_index[1,i] = parts[b[1]]
+            self.smiles2e_index[s] = e_index
+            x = torch.empty((mol.n_particles,len(self.elements)), dtype=torch.float32)
+            for i, p in enumerate(mol.particles()):
+                x[i] = self.element2vec[p.element.symbol]
+            self.smiles2x[s] = x
+
+        self.dataframe['n_nodes'] = self.dataframe.apply(self.replace_n_nodes_tuple, axis=1)
+        self.dataframe.reset_index()
+        # Read data into huge `Data` list.
+        data_list = []
+        # nodes_s, edges_s, nodes_t, edges_t = [], [], [], []
+        # for i, row in self.dataframe.iterrows():
+        #     nodes_s.append(self.smiles2n_nodes[row.terminal_group_1])
+        #     nodes_t.append(self.smiles2n_nodes[row.terminal_group_2])
+        #     edges_s.append(self.smiles2e_index[row.terminal_group_1])
+        #     edges_t.append(self.smiles2e_index[row.terminal_group_2])
+        
+        for i, row in self.dataframe.iterrows():  # Iterate in batches over the training dataset.
+            x_s = torch.tensor(self.smiles2x[self.mol_smiles[row.terminal_group_1]])
+            other_features = torch.tensor(list(rdkit_descriptors(self.mol_smiles[row.terminal_group_1],ndigits=9).values()), dtype=torch.float)
+            other_features = other_features.expand(x_s.size(0), other_features.size(0))
+            # other_features = torch.tensor(row[features.columns]).reshape(1,len(features.columns))
+            # other_features = other_features.expand(x_s.size(0), len(features.columns))
+            x_s = torch.cat((x_s,other_features), 1)
+            edge_index_s = self.smiles2e_index[self.mol_smiles[row.terminal_group_1]]
+            positions_s = torch.tensor(self.smiles2xyz[self.mol_smiles[row.terminal_group_1]])
+            n_nodes_s = self.smiles2n_nodes[self.mol_smiles[row.terminal_group_1]]
+            x_t = torch.tensor(self.smiles2x[self.mol_smiles[row.terminal_group_2]])
+            other_features = torch.tensor(list(rdkit_descriptors(self.mol_smiles[row.terminal_group_2],ndigits=9).values()), dtype=torch.float)
+            other_features = other_features.expand(x_t.size(0), other_features.size(0))
+            # other_features = torch.tensor(row[features.columns]).reshape(1,len(features.columns))
+            # other_features = other_features.expand(x_t.size(0), len(features.columns))
+            x_t = torch.cat((x_t, other_features), 1)
+            edge_index_t = self.smiles2e_index[self.mol_smiles[row.terminal_group_2]]
+            positions_t = torch.tensor(self.smiles2xyz[self.mol_smiles[row.terminal_group_2]])
+            n_nodes_t = self.smiles2n_nodes[self.mol_smiles[row.terminal_group_2]]
             # print('x_s:{}, x_t:{}, e_s:{}, e_t:{}, p_s:{}, p_t:{}'.format(x_s.size(),x_t.size(),edge_index_s.size(), edge_index_t.size(),positions_s.size(),positions_t.size()))
 
             p_data = PairData(edge_index_s, x_s, positions_s, n_nodes_s, edge_index_t, x_t, positions_t, n_nodes_t,  y = torch.tensor(row.COF))
