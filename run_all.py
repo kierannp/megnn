@@ -11,8 +11,8 @@ import sys
 # My imports
 sys.path.append('~/projects/megnn')
 # from megnn.datasets import *
-from megnn.old_datasets import COF_Dataset, SASA_Dataset
-from megnn.datasets import Simple_Dataset
+from megnn.old_datasets import COF_Dataset, SASA_Dataset2, Simple_Dataset
+# from megnn.datasets import Simple_Dataset
 from megnn.models import *
 from megnn.utils import *
 import copy
@@ -28,11 +28,11 @@ parser.add_argument('--n_node_layers', type=int, default=5)
 parser.add_argument('--n_int_layers', type=int, default=8)
 parser.add_argument('--hidden_dim', type=int, default=256)
 parser.add_argument('--n_samples', type=int, default=5000)
-parser.add_argument('--reload_data', type=bool, default=True)
+parser.add_argument('--reload_data', default=True, action='store_false')
 parser.add_argument('--dataset', choices=['COF', 'SASA', 'Simple'], default='COF')
 parser.add_argument('--gdb_path', default='/raid6/homes/kierannp/projects/megnn/datasets/gdb11/gdb11_size09.smi')
 parser.add_argument('--model', choices=['IEGNN','MGNN','IGNN','MEGNN', 'MMLP'], default='MEGNN')
-parser.add_argument('--attention', type=bool, default=False)
+parser.add_argument('--attention', default=False, action='store_true')
 parser.add_argument('--act_fn', choices=['relu','silu'], default='silu')
 parser.add_argument('--prop', choices=['COF','intercept'], default='COF')
 parser.add_argument('--standardize',  default=True, action='store_false')
@@ -41,6 +41,8 @@ parser.add_argument('--seed', type=int, default=None)
 
 
 args, unparsed_args = parser.parse_known_args()
+
+print(args)
 
 # clear the processed dataset
 if args.reload_data:
@@ -67,9 +69,9 @@ def main():
             standardize = args.standardize
         )
     elif args.dataset == "SASA":
-        dat = SASA_Dataset(
+        dat = SASA_Dataset2(
             root='.', 
-            smi_path='/raid6/homes/kierannp/projects/megnn/datasets/gdb11/gdb11_size09.smi',
+            smi_paths=['/raid6/homes/kierannp/projects/megnn/datasets/gdb11/gdb11_size09.smi','/raid6/homes/kierannp/projects/megnn/datasets/gdb11/gdb11_size04.smi'],
             n_samples=args.n_samples
         )
     elif args.dataset == "Simple":
@@ -231,9 +233,9 @@ def main():
         elif args.model == 'MGNN':
             pred = best_model(
                 h0 = [data.h_0, data.h_1], 
-                all_edges = [data.edges_0.to(torch.int64), data.edges_1.to(torch.int64)],
+                all_edges = [data.edge_index_0.to(torch.int64), data.edge_index_1.to(torch.int64)],
                 all_edge_attr = [None, None], 
-                n_nodes = [data.n_nodes_s, data.n_nodes_t], 
+                n_nodes = [data.n_nodes_0, data.n_nodes_1], 
                 x = [data.x_0, data.x_1],
                 batches=[data.h_0_batch, data.h_1_batch]
             )
@@ -249,8 +251,8 @@ def main():
                 int_edges
             )
         elif args.model == "MMLP":
-            mol1 = one_hot_s[data.n_nodes_s - torch.ones_like(data.n_nodes_s)]
-            mol2 = one_hot_t[data.n_nodes_t - torch.ones_like(data.n_nodes_t)]
+            mol1 = one_hot_s[data.n_nodes_0 - torch.ones_like(data.n_nodes_0)]
+            mol2 = one_hot_t[data.n_nodes_1 - torch.ones_like(data.n_nodes_1)]
             mol1 = mol1[:,5:]
             mol2 = mol2[:,5:]
             pred = best_model(
@@ -319,9 +321,9 @@ def train(model, epoch, loader, device, dtype, criterion, optimizer):
         elif args.model == 'MGNN':
             pred = model(
                 h0 = [data.h_0, data.h_1], 
-                all_edges = [data.edges_0.to(torch.int64), data.edges_1.to(torch.int64)], 
+                all_edges = [data.edge_index_0.to(torch.int64), data.edge_index_1.to(torch.int64)], 
                 all_edge_attr = [None, None], 
-                n_nodes = [data.n_nodes_s, data.n_nodes_t], 
+                n_nodes = [data.n_nodes_0, data.n_nodes_1], 
                 x = [data.x_0, data.x_1],
                 batches=[data.h_0_batch, data.h_1_batch]
             )
@@ -337,8 +339,8 @@ def train(model, epoch, loader, device, dtype, criterion, optimizer):
                 int_edges
             )
         elif args.model == "MMLP":
-            mol1 = one_hot_s[data.n_nodes_s - torch.ones_like(data.n_nodes_s)]
-            mol2 = one_hot_t[data.n_nodes_t - torch.ones_like(data.n_nodes_t)]
+            mol1 = one_hot_s[data.n_nodes_0 - torch.ones_like(data.n_nodes_0)]
+            mol2 = one_hot_t[data.n_nodes_1 - torch.ones_like(data.n_nodes_1)]
             mol1 = mol1[:,5:]
             mol2 = mol2[:,5:]
             pred = model(
@@ -401,9 +403,9 @@ def test(model, loader, device, dtype, criterion):
         elif args.model == 'MGNN':
             pred = model(
                 h0 = [data.h_0, data.h_1], 
-                all_edges = [data.edges_0.to(torch.int64), data.edges_1.to(torch.int64)], 
+                all_edges = [data.edge_index_0.to(torch.int64), data.edge_index_1.to(torch.int64)], 
                 all_edge_attr = [None, None], 
-                n_nodes = [data.n_nodes_s, data.n_nodes_t], 
+                n_nodes = [data.n_nodes_0, data.n_nodes_1], 
                 x = [data.x_0, data.x_1],
                 batches = [data.h_0_batch, data.h_1_batch]
             )
@@ -419,8 +421,8 @@ def test(model, loader, device, dtype, criterion):
                 int_edges
             )
         elif args.model == "MMLP":
-            mol1 = one_hot_s[data.n_nodes_s - torch.ones_like(data.n_nodes_s)]
-            mol2 = one_hot_t[data.n_nodes_t - torch.ones_like(data.n_nodes_t)]
+            mol1 = one_hot_s[data.n_nodes_0 - torch.ones_like(data.n_nodes_0)]
+            mol2 = one_hot_t[data.n_nodes_1 - torch.ones_like(data.n_nodes_1)]
             mol1 = mol1[:,5:]
             mol2 = mol2[:,5:]
             pred = model(
